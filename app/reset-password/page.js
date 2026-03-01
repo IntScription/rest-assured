@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/app/lib/supabase";
 import { useRouter } from "next/navigation";
 
@@ -10,10 +10,25 @@ export default function ResetPassword() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  // 🔥 IMPORTANT PART
+  useEffect(() => {
+    const handleRecovery = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!data.session) {
+        setError("Invalid or expired recovery link.");
+      } else {
+        setReady(true);
+      }
+    };
+
+    handleRecovery();
+  }, []);
 
   async function handleUpdate(e) {
     e.preventDefault();
-
     setLoading(true);
     setError("");
     setMessage("");
@@ -32,9 +47,20 @@ export default function ResetPassword() {
     setLoading(false);
   }
 
+  if (!ready && !error) {
+    return (
+      <main className="min-h-screen bg-black text-white flex items-center justify-center">
+        Loading...
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-black text-white flex items-center justify-center">
-      <form onSubmit={handleUpdate} className="bg-zinc-900 p-8 rounded-xl w-full max-w-md space-y-4">
+      <form
+        onSubmit={handleUpdate}
+        className="bg-zinc-900 p-8 rounded-xl w-full max-w-md space-y-4"
+      >
         <h1 className="text-xl font-bold">Set New Password</h1>
 
         <input
@@ -48,6 +74,7 @@ export default function ResetPassword() {
 
         <button
           type="submit"
+          disabled={loading}
           className="w-full bg-white text-black p-3 rounded font-semibold"
         >
           {loading ? "Updating..." : "Update Password"}
@@ -59,4 +86,3 @@ export default function ResetPassword() {
     </main>
   );
 }
-

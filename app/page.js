@@ -36,18 +36,13 @@ function HomeContent() {
   const [exercises, setExercises] = useState([]);
   const [loading, setLoading] = useState(true);
   const [navGlow, setNavGlow] = useState(null);
-  // "prev" | "next" | null
 
   /* ===== AUTH ===== */
   useEffect(() => {
     const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
-
-      if (!data.session) {
-        router.replace("/login");
-      } else {
-        setUser(data.session.user);
-      }
+      if (!data.session) router.replace("/login");
+      else setUser(data.session.user);
     };
 
     checkSession();
@@ -75,17 +70,12 @@ function HomeContent() {
         .maybeSingle();
 
       if (!data) {
-        const hash = window.location.hash;
-
-        // 🔥 Don't redirect if we're in recovery flow
-        if (hash.includes("type=recovery")) return;
-
+        if (window.location.hash.includes("type=recovery")) return;
         router.replace("/profile");
         return;
       }
 
       setActiveProgram(data);
-      setLoading(false);
     };
 
     checkProgram();
@@ -107,21 +97,18 @@ function HomeContent() {
 
         setSplits(data || []);
 
+        // set current index based on URL
         const splitFromUrl = searchParams.get("split");
         let index = 0;
-
         if (splitFromUrl) {
-          index = data.findIndex(
-            (s) => s.id.toString() === splitFromUrl
-          );
+          index = data.findIndex((s) => s.id.toString() === splitFromUrl);
         }
-
         setCurrentIndex(index >= 0 ? index : 0);
       } catch (err) {
         console.error(err);
         setSplits([]);
       } finally {
-        setLoading(false);
+        setLoading(false); // ✅ only after splits fetched
       }
     };
 
@@ -130,7 +117,7 @@ function HomeContent() {
 
   const currentSplit = splits[currentIndex] || null;
 
-  /* ===== FETCH EXERCISES (Reactive Fix) ===== */
+  /* ===== FETCH EXERCISES ===== */
   useEffect(() => {
     if (!currentSplit) return;
 
@@ -141,12 +128,7 @@ function HomeContent() {
         .eq("split_id", currentSplit.id)
         .order("id", { ascending: true });
 
-      if (error) {
-        console.error(error);
-        setExercises([]);
-        return;
-      }
-
+      if (error) console.error(error);
       setExercises(data || []);
     };
 
@@ -181,7 +163,6 @@ function HomeContent() {
         .eq("user_id", user.id)
         .eq("split_id", currentSplit.id)
         .eq("workout_date", todayKey);
-
       setCompleted(false);
     } else {
       await supabase.from("workout_sessions").insert({
@@ -189,54 +170,45 @@ function HomeContent() {
         split_id: currentSplit.id,
         workout_date: todayKey,
       });
-
       setCompleted(true);
     }
   };
 
   const handleNext = () => {
     if (!splits.length) return;
-
     setNavGlow("next");
     setTimeout(() => setNavGlow(null), 250);
-
-    const next =
-      currentIndex + 1 < splits.length ? currentIndex + 1 : 0;
-
+    const next = currentIndex + 1 < splits.length ? currentIndex + 1 : 0;
     setCurrentIndex(next);
     router.replace(`/?split=${splits[next].id}`);
   };
 
   const handlePrev = () => {
     if (!splits.length) return;
-
     setNavGlow("prev");
     setTimeout(() => setNavGlow(null), 250);
-
-    const prev =
-      currentIndex - 1 >= 0
-        ? currentIndex - 1
-        : splits.length - 1;
-
+    const prev = currentIndex - 1 >= 0 ? currentIndex - 1 : splits.length - 1;
     setCurrentIndex(prev);
     router.replace(`/?split=${splits[prev].id}`);
   };
 
+  /* ===== RENDER ===== */
   if (loading) return <FullScreenLoader />;
 
-  if (!splits.length)
+  if (!loading && !splits.length)
     return (
       <EmptyState
         message="No splits added yet."
         link="/profile"
         linkText="Build Split"
-        programName={activeProgram.name}
+        programName={activeProgram?.name}
       />
     );
 
   return (
     <main className="min-h-screen bg-black text-white px-4 py-10 flex justify-center">
       <div className="max-w-6xl w-full">
+        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-10 gap-4">
           <h1 className="text-4xl font-bold">Today</h1>
 
@@ -245,15 +217,11 @@ function HomeContent() {
               onClick={handlePrev}
               disabled={splits.length <= 1}
               className={`
-    px-4 py-2
-    bg-zinc-800
-    rounded-xl
-    transition-all duration-200
-    hover:bg-zinc-700 hover:scale-105
-    active:scale-95 active:bg-zinc-600
-    disabled:opacity-40 disabled:cursor-not-allowed
-    ${navGlow === "prev" ? "ring-2 ring-white shadow-lg shadow-white/30" : ""}
-  `}
+                px-4 py-2 bg-zinc-800 rounded-xl transition-all duration-200
+                hover:bg-zinc-700 hover:scale-105 active:scale-95 active:bg-zinc-600
+                disabled:opacity-40 disabled:cursor-not-allowed
+                ${navGlow === "prev" ? "ring-2 ring-white shadow-lg shadow-white/30" : ""}
+              `}
             >
               <FiChevronLeft size={20} />
             </button>
@@ -262,15 +230,11 @@ function HomeContent() {
               onClick={handleNext}
               disabled={splits.length <= 1}
               className={`
-    px-4 py-2
-    bg-zinc-800
-    rounded-xl
-    transition-all duration-200
-    hover:bg-zinc-700 hover:scale-105
-    active:scale-95 active:bg-zinc-600
-    disabled:opacity-40 disabled:cursor-not-allowed
-    ${navGlow === "next" ? "ring-2 ring-white shadow-lg shadow-white/30" : ""}
-  `}
+                px-4 py-2 bg-zinc-800 rounded-xl transition-all duration-200
+                hover:bg-zinc-700 hover:scale-105 active:scale-95 active:bg-zinc-600
+                disabled:opacity-40 disabled:cursor-not-allowed
+                ${navGlow === "next" ? "ring-2 ring-white shadow-lg shadow-white/30" : ""}
+              `}
             >
               <FiChevronRight size={20} />
             </button>
@@ -283,16 +247,10 @@ function HomeContent() {
           </div>
         </div>
 
+        {/* Split Info */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-8 mb-10">
-          <h2 className="text-3xl font-semibold">
-            {currentSplit.name}
-          </h2>
-
-          {currentSplit.focus && (
-            <p className="text-zinc-400 mt-2">
-              Focus: {currentSplit.focus}
-            </p>
-          )}
+          <h2 className="text-3xl font-semibold">{currentSplit.name}</h2>
+          {currentSplit.focus && <p className="text-zinc-400 mt-2">Focus: {currentSplit.focus}</p>}
 
           <div className="flex flex-wrap gap-4 mt-6">
             <Link
@@ -304,35 +262,26 @@ function HomeContent() {
 
             <button
               onClick={toggleComplete}
-              className={`px-6 py-3 rounded-xl font-semibold ${completed
-                ? "bg-green-600"
-                : "bg-zinc-700"
-                }`}
+              className={`px-6 py-3 rounded-xl font-semibold ${completed ? "bg-green-600" : "bg-zinc-700"}`}
             >
-              {completed
-                ? "Undo Complete"
-                : "Mark Complete"}
+              {completed ? "Undo Complete" : "Mark Complete"}
             </button>
           </div>
         </div>
 
-        <ExercisesGrid
-          exercises={exercises}
-          currentSplit={currentSplit}
-        />
+        {/* Exercises */}
+        <ExercisesGrid exercises={exercises} currentSplit={currentSplit} />
       </div>
     </main>
   );
 }
 
-/* ===== SWIPEABLE GRID ===== */
-function ExercisesGrid({ exercises, currentSplit }) {
+/* ===== SWIPEABLE GRID WITH RENAME & DELETE ===== */
+function ExercisesGrid({ exercises, currentSplit, onUpdate }) {
   const [swipeIndex, setSwipeIndex] = useState(0);
-  const [localExercises, setLocalExercises] = useState(exercises);
 
-  useEffect(() => {
-    setLocalExercises(exercises);
-  }, [exercises]);
+  // Initialize localExercises lazily and update only if exercises change (without useEffect)
+  const localExercises = React.useMemo(() => exercises || [], [exercises]);
 
   const handlers = useSwipeable({
     onSwipedLeft: () =>
@@ -355,63 +304,35 @@ function ExercisesGrid({ exercises, currentSplit }) {
       .update({ name: newName.trim() })
       .eq("id", exercise.id);
 
-    if (!error) {
-      setLocalExercises((prev) =>
-        prev.map((ex) =>
-          ex.id === exercise.id
-            ? { ...ex, name: newName.trim() }
-            : ex
-        )
-      );
-    }
+    if (!error && onUpdate) onUpdate();
   };
 
   const handleDelete = async (exerciseId) => {
-    const confirmDelete = confirm(
-      "Are you sure you want to delete this exercise?"
-    );
-    if (!confirmDelete) return;
+    if (!confirm("Are you sure you want to delete this exercise?")) return;
 
     const { error } = await supabase
       .from("exercises")
       .delete()
       .eq("id", exerciseId);
 
-    if (!error) {
-      setLocalExercises((prev) =>
-        prev.filter((ex) => ex.id !== exerciseId)
-      );
-    }
+    if (!error && onUpdate) onUpdate();
   };
 
   if (!localExercises.length)
-    return (
-      <p className="text-zinc-500">
-        No exercises added for this split.
-      </p>
-    );
+    return <p className="text-zinc-500">No exercises added for this split.</p>;
 
   return (
-    <div
-      className="sm:grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
-      {...handlers}
-    >
+    <div className="sm:grid sm:grid-cols-2 lg:grid-cols-3 gap-6" {...handlers}>
       {localExercises.map((exercise, index) => (
         <div
           key={exercise.id}
           className={`bg-zinc-900 border border-zinc-800 rounded-2xl p-4 relative ${index !== swipeIndex && "hidden sm:block"
             }`}
         >
-          {/* Exercise Link */}
-          <Link
-            href={`/exercise/${exercise.slug}?split=${currentSplit.id}`}
-          >
-            <p className="text-lg font-medium mb-4">
-              {exercise.name}
-            </p>
+          <Link href={`/exercise/${exercise.slug}?split=${currentSplit.id}`}>
+            <p className="text-lg font-medium mb-4">{exercise.name}</p>
           </Link>
 
-          {/* Actions */}
           <div className="flex gap-3 text-sm">
             <button
               onClick={(e) => {
@@ -443,33 +364,16 @@ function ExercisesGrid({ exercises, currentSplit }) {
 
 /* ===== HELPERS ===== */
 function FullScreenLoader() {
-  return (
-    <main className="min-h-screen bg-black text-white flex items-center justify-center">
-      Loading...
-    </main>
-  );
+  return <main className="min-h-screen bg-black text-white flex items-center justify-center">Loading...</main>;
 }
 
 function EmptyState({ message, link, linkText, programName }) {
   return (
     <main className="min-h-screen bg-black text-white flex items-center justify-center">
       <div className="text-center space-y-4">
-        {programName && (
-          <h1 className="text-3xl font-bold">
-            {programName}
-          </h1>
-        )}
-
-        <h1 className="text-3xl font-bold">
-          {message}
-        </h1>
-
-        <Link
-          href={link}
-          className="px-6 py-3 bg-white text-black rounded-xl font-semibold"
-        >
-          {linkText}
-        </Link>
+        {programName && <h1 className="text-3xl font-bold">{programName}</h1>}
+        <h1 className="text-3xl font-bold">{message}</h1>
+        <Link href={link} className="px-6 py-3 bg-white text-black rounded-xl font-semibold">{linkText}</Link>
       </div>
     </main>
   );

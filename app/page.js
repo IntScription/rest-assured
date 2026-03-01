@@ -40,6 +40,18 @@ function HomeContent() {
 
   /* ===== AUTH ===== */
   useEffect(() => {
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
+
+      if (!data.session) {
+        router.replace("/login");
+      } else {
+        setUser(data.session.user);
+      }
+    };
+
+    checkSession();
+
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (!session) router.replace("/login");
@@ -54,7 +66,7 @@ function HomeContent() {
   useEffect(() => {
     if (!user) return;
 
-    const fetchProgram = async () => {
+    const checkProgram = async () => {
       const { data } = await supabase
         .from("programs")
         .select("*")
@@ -62,11 +74,18 @@ function HomeContent() {
         .eq("is_active", true)
         .maybeSingle();
 
-      setActiveProgram(data || null);
+      if (!data) {
+        // 🔥 First time user → go to profile
+        router.replace("/profile");
+        return;
+      }
+
+      setActiveProgram(data);
+      setLoading(false);
     };
 
-    fetchProgram();
-  }, [user]);
+    checkProgram();
+  }, [user, router]);
 
   /* ===== FETCH SPLITS ===== */
   useEffect(() => {
@@ -200,15 +219,6 @@ function HomeContent() {
   };
 
   if (loading) return <FullScreenLoader />;
-
-  if (!activeProgram)
-    return (
-      <EmptyState
-        message="No Active Program"
-        link="/profile"
-        linkText="Create Program"
-      />
-    );
 
   if (!splits.length)
     return (

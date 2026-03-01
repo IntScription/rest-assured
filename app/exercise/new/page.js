@@ -135,9 +135,18 @@ export default function NewExercisePage() {
   return (
     <main className="min-h-screen bg-black text-white px-4 py-6 flex justify-center">
       <div className="w-full max-w-md space-y-6">
-        <Link href="/" className="text-sm text-zinc-400 hover:text-white">
+        <button
+          onClick={() => {
+            if (window.history.length > 1) {
+              router.back();
+            } else {
+              router.replace("/");
+            }
+          }}
+          className="text-sm text-zinc-400 hover:text-white"
+        >
           ← Back
-        </Link>
+        </button>
 
         <h1 className="text-3xl font-bold text-center">Create New Exercise</h1>
 

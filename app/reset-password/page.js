@@ -15,6 +15,14 @@ export default function ResetPassword() {
   // 🔥 IMPORTANT PART
   useEffect(() => {
     const handleRecovery = async () => {
+      const hash = window.location.hash;
+
+      // 🔥 Only allow recovery links
+      if (!hash.includes("type=recovery")) {
+        router.replace("/login");
+        return;
+      }
+
       const { data } = await supabase.auth.getSession();
 
       if (!data.session) {
@@ -25,7 +33,7 @@ export default function ResetPassword() {
     };
 
     handleRecovery();
-  }, []);
+  }, [router]);
 
   async function handleUpdate(e) {
     e.preventDefault();

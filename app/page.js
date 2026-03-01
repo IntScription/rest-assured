@@ -75,7 +75,11 @@ function HomeContent() {
         .maybeSingle();
 
       if (!data) {
-        // 🔥 First time user → go to profile
+        const hash = window.location.hash;
+
+        // 🔥 Don't redirect if we're in recovery flow
+        if (hash.includes("type=recovery")) return;
+
         router.replace("/profile");
         return;
       }

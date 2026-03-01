@@ -16,7 +16,7 @@ export default function ForgotPassword() {
   async function handleReset(e) {
     e.preventDefault();
 
-    if (cooldown > 0) return;
+    if (cooldown > 0 || loading) return;
 
     setLoading(true);
     setError("");
@@ -28,20 +28,25 @@ export default function ForgotPassword() {
       });
 
       if (error) {
-        if (error.message.toLowerCase().includes("rate")) {
-          setError("Too many attempts. Wait a minute before trying again.");
+        if (error.status === 429) {
+          setError("Too many attempts. Please wait a few minutes.");
         } else {
-          setError(error.message);
+          setError(error.message || "Failed to send reset link.");
         }
-      } else {
-        setMessage("If this email exists, a reset link has been sent.");
-        setCooldown(60);
-      }
-    } catch (err) {
-      setError("Something went wrong. Try again.");
-    }
 
-    setLoading(false);
+        setLoading(false);
+        return;
+      }
+
+      setMessage("If this email exists, a reset link has been sent.");
+      setCooldown(90);
+      setLoading(false);
+
+    } catch (err) {
+      console.log("RESET ERROR:", err);
+      setError("Network error. Please try again.");
+      setLoading(false);
+    }
   }
 
   useEffect(() => {

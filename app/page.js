@@ -328,20 +328,63 @@ function HomeContent() {
 /* ===== SWIPEABLE GRID ===== */
 function ExercisesGrid({ exercises, currentSplit }) {
   const [swipeIndex, setSwipeIndex] = useState(0);
+  const [localExercises, setLocalExercises] = useState(exercises);
+
+  useEffect(() => {
+    setLocalExercises(exercises);
+  }, [exercises]);
 
   const handlers = useSwipeable({
     onSwipedLeft: () =>
       setSwipeIndex((prev) =>
-        prev + 1 < exercises.length ? prev + 1 : 0
+        prev + 1 < localExercises.length ? prev + 1 : 0
       ),
     onSwipedRight: () =>
       setSwipeIndex((prev) =>
-        prev - 1 >= 0 ? prev - 1 : exercises.length - 1
+        prev - 1 >= 0 ? prev - 1 : localExercises.length - 1
       ),
     trackMouse: true,
   });
 
-  if (!exercises.length)
+  const handleRename = async (exercise) => {
+    const newName = prompt("Rename exercise:", exercise.name);
+    if (!newName || newName.trim() === exercise.name) return;
+
+    const { error } = await supabase
+      .from("exercises")
+      .update({ name: newName.trim() })
+      .eq("id", exercise.id);
+
+    if (!error) {
+      setLocalExercises((prev) =>
+        prev.map((ex) =>
+          ex.id === exercise.id
+            ? { ...ex, name: newName.trim() }
+            : ex
+        )
+      );
+    }
+  };
+
+  const handleDelete = async (exerciseId) => {
+    const confirmDelete = confirm(
+      "Are you sure you want to delete this exercise?"
+    );
+    if (!confirmDelete) return;
+
+    const { error } = await supabase
+      .from("exercises")
+      .delete()
+      .eq("id", exerciseId);
+
+    if (!error) {
+      setLocalExercises((prev) =>
+        prev.filter((ex) => ex.id !== exerciseId)
+      );
+    }
+  };
+
+  if (!localExercises.length)
     return (
       <p className="text-zinc-500">
         No exercises added for this split.
@@ -353,19 +396,45 @@ function ExercisesGrid({ exercises, currentSplit }) {
       className="sm:grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
       {...handlers}
     >
-      {exercises.map((exercise, index) => (
+      {localExercises.map((exercise, index) => (
         <div
           key={exercise.id}
-          className={`bg-zinc-900 border border-zinc-800 rounded-2xl p-4 ${index !== swipeIndex && "hidden sm:block"
+          className={`bg-zinc-900 border border-zinc-800 rounded-2xl p-4 relative ${index !== swipeIndex && "hidden sm:block"
             }`}
         >
+          {/* Exercise Link */}
           <Link
             href={`/exercise/${exercise.slug}?split=${currentSplit.id}`}
           >
-            <p className="text-lg font-medium">
+            <p className="text-lg font-medium mb-4">
               {exercise.name}
             </p>
           </Link>
+
+          {/* Actions */}
+          <div className="flex gap-3 text-sm">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                handleRename(exercise);
+              }}
+              className="px-3 py-1 bg-zinc-800 rounded-lg hover:bg-zinc-700"
+            >
+              Rename
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                handleDelete(exercise.id);
+              }}
+              className="px-3 py-1 bg-red-600 rounded-lg hover:bg-red-500"
+            >
+              Delete
+            </button>
+          </div>
         </div>
       ))}
     </div>

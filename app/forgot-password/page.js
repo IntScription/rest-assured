@@ -13,19 +13,27 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
+  // Simple email validation
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
   async function handleReset(e) {
     e.preventDefault();
 
-    if (cooldown > 0 || loading) return;
+    if (cooldown > 0 || loading || !isValidEmail) return;
 
     setLoading(true);
     setError("");
     setMessage("");
 
+    const cleanEmail = email.trim().toLowerCase();
+
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      });
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        cleanEmail,
+        {
+          redirectTo: `${window.location.origin}/reset-password`,
+        }
+      );
 
       if (error) {
         if (error.status === 429) {
@@ -33,7 +41,6 @@ export default function ForgotPassword() {
         } else {
           setError(error.message || "Failed to send reset link.");
         }
-
         setLoading(false);
         return;
       }
@@ -42,6 +49,11 @@ export default function ForgotPassword() {
       setCooldown(90);
       setLoading(false);
 
+      // Auto redirect after success
+      setTimeout(() => {
+        router.push("/login");
+      }, 4000);
+
     } catch (err) {
       console.log("RESET ERROR:", err);
       setError("Network error. Please try again.");
@@ -49,14 +61,15 @@ export default function ForgotPassword() {
     }
   }
 
+  // Clean cooldown countdown (no interval stacking)
   useEffect(() => {
-    if (cooldown === 0) return;
+    if (cooldown <= 0) return;
 
-    const timer = setInterval(() => {
-      setCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+    const timer = setTimeout(() => {
+      setCooldown((prev) => prev - 1);
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => clearTimeout(timer);
   }, [cooldown]);
 
   return (
@@ -65,23 +78,27 @@ export default function ForgotPassword() {
       {/* Back Button */}
       <button
         onClick={() => router.push("/login")}
-        className="absolute top-6 right-6 text-sm text-gray-400 hover:text-white"
+        className="absolute top-6 right-6 text-sm text-gray-400 hover:text-white transition"
       >
         Back
       </button>
 
       <form
         onSubmit={handleReset}
-        className="bg-zinc-900 p-8 rounded-2xl w-full max-w-md space-y-5"
+        className="bg-zinc-900 p-8 rounded-2xl w-full max-w-md space-y-5 shadow-xl"
       >
         <h1 className="text-2xl font-bold text-center">
           Forgot Password
         </h1>
 
+        <p className="text-sm text-gray-400 text-center">
+          Enter your account email and we’ll send you a reset link.
+        </p>
+
         <input
           type="email"
           placeholder="Enter your email"
-          className="w-full p-3 rounded-lg bg-zinc-800 border border-zinc-700 focus:border-white outline-none"
+          className="w-full p-3 rounded-lg bg-zinc-800 border border-zinc-700 focus:border-white outline-none transition"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
@@ -89,14 +106,16 @@ export default function ForgotPassword() {
 
         <button
           type="submit"
-          disabled={loading || cooldown > 0}
-          className="w-full bg-white text-black p-3 rounded-lg font-semibold disabled:opacity-50"
+          disabled={loading || cooldown > 0 || !isValidEmail}
+          className="w-full bg-white text-black p-3 rounded-lg font-semibold disabled:opacity-50 transition"
         >
           {loading
             ? "Sending..."
-            : cooldown > 0
-              ? `Wait ${cooldown}s`
-              : "Send Reset Link"}
+            : message
+              ? "Email Sent ✓"
+              : cooldown > 0
+                ? `Wait ${cooldown}s`
+                : "Send Reset Link"}
         </button>
 
         {error && (
@@ -104,7 +123,9 @@ export default function ForgotPassword() {
         )}
 
         {message && (
-          <p className="text-green-500 text-sm text-center">{message}</p>
+          <p className="text-green-500 text-sm text-center">
+            {message} Redirecting to login...
+          </p>
         )}
       </form>
     </main>

@@ -295,6 +295,42 @@ export default function ProfilePage() {
     router.push("/");
   };
 
+  /* ================= DELETE ACCOUNT ================= */
+  const deleteAccount = async () => {
+    const confirmed = confirm(
+      "This will permanently delete your account and all workouts, programs, and progress. This cannot be undone.\n\nAre you sure?"
+    );
+
+    if (!confirmed) return;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      alert("Session expired. Please login again.");
+      return;
+    }
+
+    const response = await fetch("/api/delete-user", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      alert(data.error || "Failed to delete account.");
+      return;
+    }
+
+    await supabase.auth.signOut();
+    alert("Account deleted successfully.");
+    router.push("/");
+  };
+
   if (loading)
     return (
       <div className="p-10 text-white flex justify-center items-center">
@@ -417,13 +453,22 @@ export default function ProfilePage() {
         </section>
       )}
 
-      <div className="pt-12 border-t border-zinc-800 mt-16 text-center">
+      <div className="pt-12 border-t border-zinc-800 mt-16 text-center flex flex-col gap-4 items-center">
+
         <button
           onClick={logout}
-          className="text-red-400 hover:text-red-300 text-sm"
+          className="text-zinc-400 hover:text-white text-sm"
         >
           Logout
         </button>
+
+        <button
+          onClick={deleteAccount}
+          className="text-red-500 hover:text-red-400 text-sm font-medium"
+        >
+          Permanently Delete Account
+        </button>
+
       </div>
     </main>
   );

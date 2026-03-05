@@ -137,39 +137,48 @@ function HomeContent() {
 
   /* ===== COMPLETION ===== */
   useEffect(() => {
-    if (!user || !currentSplit) return;
+    if (!user || !currentSplit || !activeProgram) return;
 
     const fetchCompletion = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("workout_sessions")
         .select("id")
         .eq("user_id", user.id)
+        .eq("program_id", activeProgram.id)
         .eq("split_id", currentSplit.id)
-        .eq("workout_date", todayKey);
+        .eq("workout_date", todayKey)
+        .maybeSingle();
 
-      setCompleted(data?.length > 0);
+      if (!error) {
+        setCompleted(!!data);
+      }
     };
 
     fetchCompletion();
-  }, [user, currentSplit, todayKey]);
+  }, [user, currentSplit, activeProgram, todayKey]);
 
   const toggleComplete = async () => {
-    if (!user || !currentSplit) return;
+    if (!user || !currentSplit || !activeProgram) return;
 
     if (completed) {
       await supabase
         .from("workout_sessions")
         .delete()
         .eq("user_id", user.id)
+        .eq("program_id", activeProgram.id)
         .eq("split_id", currentSplit.id)
         .eq("workout_date", todayKey);
+
       setCompleted(false);
     } else {
       await supabase.from("workout_sessions").insert({
         user_id: user.id,
+        program_id: activeProgram.id,
         split_id: currentSplit.id,
         workout_date: todayKey,
+        completed_at: new Date().toISOString(),
       });
+
       setCompleted(true);
     }
   };

@@ -12,7 +12,7 @@ export type AuthRedirectResult =
 
 export async function handleAuthRedirectUrl(url: string | null): Promise<AuthRedirectResult> {
   if (!url) {
-    return { ok: true, type: "unknown" };
+    return { ok: false, error: "No callback URL received." };
   }
 
   try {
@@ -29,14 +29,10 @@ export async function handleAuthRedirectUrl(url: string | null): Promise<AuthRed
       const { error } = await supabase.auth.exchangeCodeForSession(code);
       if (error) return { ok: false, error: error.message };
 
-      const type =
-        parsed?.searchParams?.get("type") === "recovery"
-          ? "recovery"
-          : parsed?.searchParams?.get("type") === "signup"
-            ? "signup"
-            : "oauth";
-
-      return { ok: true, type };
+      const typeParam = parsed?.searchParams?.get("type");
+      if (typeParam === "recovery") return { ok: true, type: "recovery" };
+      if (typeParam === "signup") return { ok: true, type: "signup" };
+      return { ok: true, type: "oauth" };
     }
 
     const hashParams = parseHashParams(url);
@@ -57,9 +53,9 @@ export async function handleAuthRedirectUrl(url: string | null): Promise<AuthRed
       return { ok: true, type: "oauth" };
     }
 
-    return { ok: true, type: "unknown" };
+    return { ok: false, error: "No auth code or tokens found in callback URL." };
   } catch (err: any) {
-    return { ok: false, error: String(err?.message ?? "Could not process auth link") };
+    return { ok: false, error: String(err?.message ?? "Unknown auth callback error") };
   }
 }
 

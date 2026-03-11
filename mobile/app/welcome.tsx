@@ -4,13 +4,15 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-nati
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { AppTheme, useAppTheme } from "@/src/theme/theme";
+import { markWelcomeSeen } from "@/src/lib/welcome";
 
 export default function WelcomeScreen() {
   const router = useRouter();
   const t = useAppTheme();
 
-  const goToApp = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  const goToApp = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await markWelcomeSeen();
     router.replace("/(tabs)");
   };
 
@@ -131,4 +133,3 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
-

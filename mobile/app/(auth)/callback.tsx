@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import { useAppTheme } from "@/src/theme/theme";
 import { handleAuthRedirectUrl, getInitialAuthUrl } from "@/src/lib/auth-redirect";
+import { shouldShowWelcome } from "@/src/lib/welcome";
 import { supabase } from "@/src/lib/supabase";
 
 export default function AuthCallback() {
@@ -39,13 +40,11 @@ export default function AuthCallback() {
         return;
       }
 
-      const created = new Date(user.created_at).getTime();
-      const now = Date.now();
-      const isNewUser = now - created < 60000;
+      const showWelcome = await shouldShowWelcome();
 
       setLoading(false);
 
-      if (result.type === "signup" || isNewUser) {
+      if (showWelcome) {
         router.replace("/welcome");
       } else {
         router.replace("/(tabs)");

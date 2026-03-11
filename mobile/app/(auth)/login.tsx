@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { shouldShowWelcome } from "@/src/lib/welcome";
 import * as WebBrowser from "expo-web-browser";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -29,11 +30,6 @@ function isAuthSessionSuccess(
   res: WebBrowser.WebBrowserAuthSessionResult
 ): res is WebBrowser.WebBrowserAuthSessionResult & { type: "success"; url: string } {
   return (res as any)?.type === "success" && typeof (res as any)?.url === "string";
-}
-
-function parseHashParams(url: string) {
-  const hash = url.split("#")[1] ?? "";
-  return new URLSearchParams(hash);
 }
 
 export default function LoginScreen() {
@@ -52,13 +48,27 @@ export default function LoginScreen() {
   const titleFloat = useRef(new RNAnimated.Value(0)).current;
 
   useEffect(() => {
-    RNAnimated.timing(titleAnim, { toValue: 1, duration: 450, useNativeDriver: true }).start();
+    RNAnimated.timing(titleAnim, {
+      toValue: 1,
+      duration: 450,
+      useNativeDriver: true,
+    }).start();
+
     const loop = RNAnimated.loop(
       RNAnimated.sequence([
-        RNAnimated.timing(titleFloat, { toValue: 1, duration: 1600, useNativeDriver: true }),
-        RNAnimated.timing(titleFloat, { toValue: 0, duration: 1600, useNativeDriver: true }),
+        RNAnimated.timing(titleFloat, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(titleFloat, {
+          toValue: 0,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
       ])
     );
+
     loop.start();
     return () => loop.stop();
   }, [titleAnim, titleFloat]);
@@ -73,11 +83,9 @@ export default function LoginScreen() {
       return;
     }
 
-    const created = new Date(user.created_at).getTime();
-    const now = Date.now();
-    const isNewUser = now - created < 60000;
+    const showWelcome = await shouldShowWelcome();
 
-    if (isNewUser) {
+    if (showWelcome) {
       router.replace("/welcome");
     } else {
       router.replace("/(tabs)");
@@ -138,50 +146,14 @@ export default function LoginScreen() {
 
       if (!isAuthSessionSuccess(res)) {
         if ((res as any)?.type === "cancel" || (res as any)?.type === "dismiss") return;
-        throw new Error(`Auth session did not succeed. Result: ${JSON.stringify(res)}`);
+        throw new Error("Auth session did not succeed.");
       }
-
-      let parsed: URL | null = null;
-      try {
-        parsed = new URL(res.url);
-      } catch {
-        parsed = null;
-      }
-
-      const code = parsed?.searchParams?.get("code") ?? null;
-
-      if (code) {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) throw exchangeError;
-
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await routeAfterAuth();
-        return;
-      }
-
-      const hashParams = parseHashParams(res.url);
-      const access_token = hashParams.get("access_token");
-      const refresh_token = hashParams.get("refresh_token");
-
-      if (!access_token || !refresh_token) {
-        const err = parsed?.searchParams?.get("error") ?? hashParams.get("error");
-        const desc = parsed?.searchParams?.get("error_description") ?? hashParams.get("error_description");
-        throw new Error(desc || err || `No code or tokens returned. Callback: ${res.url}`);
-      }
-
-      const { error: setSessionError } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (setSessionError) throw setSessionError;
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await routeAfterAuth();
+      router.replace("/(auth)/callback");
     } catch (err: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const msg = String(err?.message ?? "");
-      Alert.alert("Sign in failed", msg || "Please try again.");
+      Alert.alert("Sign in failed", String(err?.message ?? "Please try again."));
     } finally {
       setOauthLoading(null);
     }
@@ -190,7 +162,13 @@ export default function LoginScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: t.background }}
-      contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 24, paddingTop: 60, paddingBottom: 40 }}
+      contentContainerStyle={{
+        flexGrow: 1,
+        justifyContent: "center",
+        padding: 24,
+        paddingTop: 60,
+        paddingBottom: 40,
+      }}
       keyboardShouldPersistTaps="handled"
     >
       <RNAnimated.Text
@@ -253,7 +231,11 @@ export default function LoginScreen() {
         disabled={loading}
         style={{ backgroundColor: t.link, padding: 14, borderRadius: 12, alignItems: "center" }}
       >
-        {loading ? <ActivityIndicator color={t.primaryText} /> : <Text style={{ color: "#fff", fontWeight: "700" }}>Login</Text>}
+        {loading ? (
+          <ActivityIndicator color={t.primaryText} />
+        ) : (
+          <Text style={{ color: "#fff", fontWeight: "700" }}>Login</Text>
+        )}
       </TouchableOpacity>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18, marginBottom: 14 }}>

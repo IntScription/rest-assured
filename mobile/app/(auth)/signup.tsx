@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Platform, View } from "react-native";
+import { useMemo, useState } from "react";
+import {
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  Platform,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as WebBrowser from "expo-web-browser";
@@ -21,11 +30,6 @@ function isAuthSessionSuccess(
   return (res as any)?.type === "success" && typeof (res as any)?.url === "string";
 }
 
-function parseHashParams(url: string) {
-  const hash = url.split("#")[1] ?? "";
-  return new URLSearchParams(hash);
-}
-
 export default function SignupScreen() {
   const router = useRouter();
   const t = useAppTheme();
@@ -37,29 +41,6 @@ export default function SignupScreen() {
   const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
 
   const redirectTo = useMemo(() => computeRedirectTo(), []);
-
-  useEffect(() => { }, [redirectTo]);
-
-  const routeAfterAuth = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      router.replace("/(tabs)");
-      return;
-    }
-
-    const created = new Date(user.created_at).getTime();
-    const now = Date.now();
-    const isNewUser = now - created < 60000;
-
-    if (isNewUser) {
-      router.replace("/welcome");
-    } else {
-      router.replace("/(tabs)");
-    }
-  };
 
   const handleSignup = async () => {
     const trimmedEmail = email.trim();
@@ -113,50 +94,14 @@ export default function SignupScreen() {
 
       if (!isAuthSessionSuccess(res)) {
         if ((res as any)?.type === "cancel" || (res as any)?.type === "dismiss") return;
-        throw new Error(`Auth session did not succeed. Result: ${JSON.stringify(res)}`);
+        throw new Error("Auth session did not succeed.");
       }
-
-      let parsed: URL | null = null;
-      try {
-        parsed = new URL(res.url);
-      } catch {
-        parsed = null;
-      }
-
-      const code = parsed?.searchParams?.get("code") ?? null;
-
-      if (code) {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) throw exchangeError;
-
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await routeAfterAuth();
-        return;
-      }
-
-      const hashParams = parseHashParams(res.url);
-      const access_token = hashParams.get("access_token");
-      const refresh_token = hashParams.get("refresh_token");
-
-      if (!access_token || !refresh_token) {
-        const err = parsed?.searchParams?.get("error") ?? hashParams.get("error");
-        const desc = parsed?.searchParams?.get("error_description") ?? hashParams.get("error_description");
-        throw new Error(desc || err || `No code or tokens returned. Callback: ${res.url}`);
-      }
-
-      const { error: setSessionError } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (setSessionError) throw setSessionError;
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await routeAfterAuth();
+      router.replace("/(auth)/callback");
     } catch (err: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const msg = String(err?.message ?? "");
-      Alert.alert("Sign up failed", msg || "Please try again.");
+      Alert.alert("Sign up failed", String(err?.message ?? "Please try again."));
     } finally {
       setOauthLoading(null);
     }
@@ -165,11 +110,21 @@ export default function SignupScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: t.background }}
-      contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 24, paddingTop: 60, paddingBottom: 40 }}
+      contentContainerStyle={{
+        flexGrow: 1,
+        justifyContent: "center",
+        padding: 24,
+        paddingTop: 60,
+        paddingBottom: 40,
+      }}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={{ fontSize: 28, fontWeight: "700", marginBottom: 20, color: t.text }}>Sign Up</Text>
-      <Text style={{ color: t.mutedText, marginBottom: 20 }}>Create your account to start logging splits and workouts.</Text>
+      <Text style={{ fontSize: 28, fontWeight: "700", marginBottom: 20, color: t.text }}>
+        Sign Up
+      </Text>
+      <Text style={{ color: t.mutedText, marginBottom: 20 }}>
+        Create your account to start logging splits and workouts.
+      </Text>
 
       <TextInput
         placeholder="Email"
@@ -211,7 +166,11 @@ export default function SignupScreen() {
         disabled={loading}
         style={{ backgroundColor: t.link, padding: 14, borderRadius: 12, alignItems: "center" }}
       >
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ color: "#fff", fontWeight: "700" }}>Sign Up</Text>}
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={{ color: "#fff", fontWeight: "700" }}>Sign Up</Text>
+        )}
       </TouchableOpacity>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18, marginBottom: 14 }}>

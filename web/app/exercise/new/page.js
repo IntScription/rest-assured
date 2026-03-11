@@ -7,8 +7,8 @@ import Link from "next/link";
 
 export default function NewExercisePage() {
   const router = useRouter();
-  const supabase = getSupabaseClient();
 
+  const [supabase, setSupabase] = useState(null);
   const [user, setUser] = useState(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -19,6 +19,13 @@ export default function NewExercisePage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
+    const client = getSupabaseClient();
+    setSupabase(client);
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+
     async function checkAuth() {
       const { data } = await supabase.auth.getSession();
       const sessionUser = data?.session?.user ?? null;
@@ -36,7 +43,7 @@ export default function NewExercisePage() {
   }, [router, supabase]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const fetchUserSplits = async () => {
       try {
@@ -76,7 +83,7 @@ export default function NewExercisePage() {
 
   async function handleCreate(e) {
     e.preventDefault();
-    if (loading) return;
+    if (loading || !supabase) return;
 
     const trimmedName = name.trim();
 
@@ -136,7 +143,7 @@ export default function NewExercisePage() {
     }
   }
 
-  if (authLoading) {
+  if (authLoading || !supabase) {
     return (
       <main className="min-h-screen bg-black text-white flex items-center justify-center">
         Loading...

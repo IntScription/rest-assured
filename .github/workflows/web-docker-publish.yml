@@ -40,6 +40,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Debug image name
+        run: echo "ghcr.io/${OWNER_LC}/gravity-log-web:latest"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:

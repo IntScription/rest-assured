@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabase } from "@/app/lib/supabase";
+import { getSupabaseClient } from "@/app/lib/supabase";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function NewExercisePage() {
   const router = useRouter();
+  const supabase = getSupabaseClient();
 
   const [user, setUser] = useState(null);
   const [name, setName] = useState("");
@@ -17,22 +18,23 @@ export default function NewExercisePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
-  /* ===== AUTH ===== */
   useEffect(() => {
     async function checkAuth() {
       const { data } = await supabase.auth.getSession();
       const sessionUser = data?.session?.user ?? null;
+
       if (!sessionUser) {
         router.replace("/login");
         return;
       }
+
       setUser(sessionUser);
       setAuthLoading(false);
     }
-    checkAuth();
-  }, [router]);
 
-  /* ===== FETCH USER SPLITS ===== */
+    checkAuth();
+  }, [router, supabase]);
+
   useEffect(() => {
     if (!user) return;
 
@@ -61,7 +63,7 @@ export default function NewExercisePage() {
     };
 
     fetchUserSplits();
-  }, [user]);
+  }, [user, supabase]);
 
   function generateSlug(value) {
     return value
@@ -77,17 +79,25 @@ export default function NewExercisePage() {
     if (loading) return;
 
     const trimmedName = name.trim();
+
     if (!trimmedName) {
       setErrorMsg("Exercise name is required.");
       return;
     }
+
     if (!selectedSplitId) {
       setErrorMsg("Please select a split.");
       return;
     }
 
+    if (!user) {
+      setErrorMsg("User not found.");
+      return;
+    }
+
     setLoading(true);
     setErrorMsg("");
+
     const generatedSlug = generateSlug(trimmedName);
 
     try {
@@ -98,6 +108,7 @@ export default function NewExercisePage() {
         .maybeSingle();
 
       if (existingError) throw existingError;
+
       if (existing) {
         router.push(`/exercise/${existing.slug}`);
         return;
@@ -115,6 +126,7 @@ export default function NewExercisePage() {
         .single();
 
       if (insertError) throw insertError;
+
       router.push(`/exercise/${newExercise.slug}`);
     } catch (err) {
       console.error("Error creating exercise:", err);

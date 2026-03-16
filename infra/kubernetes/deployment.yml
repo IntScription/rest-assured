@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gravity-log-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gravity-log-web
+  template:
+    metadata:
+      labels:
+        app: gravity-log-web
+    spec:
+      containers:
+        - name: gravity-log-web
+          image: ghcr.io/intscription/gravity-log-web:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: gravity-log-secrets

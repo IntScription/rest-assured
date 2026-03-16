@@ -63,6 +63,7 @@ pnpm-debug.log*
 # ==============================
 .DS_Store
 *.pem
+infra/kubernetes/secret.local.yml
 
 # ==============================
 # Vercel

@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "buildNumber": "3",
+      "buildNumber": "4",
       "supportsTablet": true,
       "bundleIdentifier": "com.mrk.restassured",
       "usesAppleSignIn": true,
@@ -34,6 +34,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-apple-authentication",
       [
         "expo-splash-screen",
         {

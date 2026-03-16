@@ -14,9 +14,13 @@ import {
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as WebBrowser from "expo-web-browser";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Crypto from "expo-crypto";
 import { Ionicons } from "@expo/vector-icons";
+
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { shouldShowWelcome } from "@/src/lib/welcome";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -30,6 +34,10 @@ function isAuthSessionSuccess(
   return (res as any)?.type === "success" && typeof (res as any)?.url === "string";
 }
 
+async function sha256(input: string) {
+  return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
+}
+
 export default function SignupScreen() {
   const router = useRouter();
   const t = useAppTheme();
@@ -41,6 +49,25 @@ export default function SignupScreen() {
   const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
 
   const redirectTo = useMemo(() => computeRedirectTo(), []);
+
+  const routeAfterAuth = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.replace("/(tabs)");
+      return;
+    }
+
+    const showWelcome = await shouldShowWelcome();
+
+    if (showWelcome) {
+      router.replace("/welcome");
+    } else {
+      router.replace("/(tabs)");
+    }
+  };
 
   const handleSignup = async () => {
     const trimmedEmail = email.trim();
@@ -74,13 +101,13 @@ export default function SignupScreen() {
     }
   };
 
-  const handleOAuth = async (provider: "google" | "apple") => {
+  const handleGoogleSignup = async () => {
     try {
-      setOauthLoading(provider);
+      setOauthLoading("google");
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider,
+        provider: "google",
         options: {
           redirectTo,
           skipBrowserRedirect: true,
@@ -91,17 +118,67 @@ export default function SignupScreen() {
       if (!data?.url) throw new Error("No OAuth URL returned.");
 
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      const resultType = (res as any)?.type;
+
+      if (resultType === "cancel" || resultType === "dismiss") {
+        return;
+      }
 
       if (!isAuthSessionSuccess(res)) {
-        if ((res as any)?.type === "cancel" || (res as any)?.type === "dismiss") return;
-        throw new Error("Auth session did not succeed.");
+        throw new Error("Google auth session did not succeed.");
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace("/(auth)/callback");
+
+      router.replace({
+        pathname: "/(auth)/callback",
+        params: { authUrl: encodeURIComponent(res.url) },
+      });
     } catch (err: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Sign up failed", String(err?.message ?? "Please try again."));
+      Alert.alert("Google sign up failed", String(err?.message ?? "Please try again."));
+    } finally {
+      setOauthLoading(null);
+    }
+  };
+
+  const handleAppleSignup = async () => {
+    try {
+      setOauthLoading("apple");
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const rawNonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const hashedNonce = await sha256(rawNonce);
+
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+
+      if (!credential.identityToken) {
+        throw new Error("No Apple identity token returned.");
+      }
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+        nonce: rawNonce,
+      });
+
+      if (error) throw error;
+
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await routeAfterAuth();
+    } catch (err: any) {
+      if (err?.code === "ERR_REQUEST_CANCELED") {
+        return;
+      }
+
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Apple sign up failed", String(err?.message ?? "Please try again."));
     } finally {
       setOauthLoading(null);
     }
@@ -119,9 +196,7 @@ export default function SignupScreen() {
       }}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={{ fontSize: 28, fontWeight: "700", marginBottom: 20, color: t.text }}>
-        Sign Up
-      </Text>
+      <Text style={{ fontSize: 28, fontWeight: "700", marginBottom: 20, color: t.text }}>Sign Up</Text>
       <Text style={{ color: t.mutedText, marginBottom: 20 }}>
         Create your account to start logging splits and workouts.
       </Text>
@@ -166,11 +241,7 @@ export default function SignupScreen() {
         disabled={loading}
         style={{ backgroundColor: t.link, padding: 14, borderRadius: 12, alignItems: "center" }}
       >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={{ color: "#fff", fontWeight: "700" }}>Sign Up</Text>
-        )}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ color: "#fff", fontWeight: "700" }}>Sign Up</Text>}
       </TouchableOpacity>
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18, marginBottom: 14 }}>
@@ -180,7 +251,7 @@ export default function SignupScreen() {
       </View>
 
       <TouchableOpacity
-        onPress={() => handleOAuth("google")}
+        onPress={handleGoogleSignup}
         disabled={!!oauthLoading || loading}
         style={{
           borderWidth: 1,
@@ -207,7 +278,7 @@ export default function SignupScreen() {
 
       {Platform.OS === "ios" && (
         <TouchableOpacity
-          onPress={() => handleOAuth("apple")}
+          onPress={handleAppleSignup}
           disabled={!!oauthLoading || loading}
           style={{
             borderWidth: 1,

@@ -14,11 +14,14 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import * as WebBrowser from "expo-web-browser";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Crypto from "expo-crypto";
+import { Ionicons } from "@expo/vector-icons";
+
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
 import { shouldShowWelcome } from "@/src/lib/welcome";
-import * as WebBrowser from "expo-web-browser";
-import { Ionicons } from "@expo/vector-icons";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -30,6 +33,10 @@ function isAuthSessionSuccess(
   res: WebBrowser.WebBrowserAuthSessionResult
 ): res is WebBrowser.WebBrowserAuthSessionResult & { type: "success"; url: string } {
   return (res as any)?.type === "success" && typeof (res as any)?.url === "string";
+}
+
+async function sha256(input: string) {
+  return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
 }
 
 export default function LoginScreen() {
@@ -109,10 +116,7 @@ export default function LoginScreen() {
 
       if (error) {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        Alert.alert(
-          "Login Failed",
-          "Invalid login credentials. If this account was created with Google, use Continue with Google."
-        );
+        Alert.alert("Login Failed", error.message);
         return;
       }
 
@@ -126,13 +130,13 @@ export default function LoginScreen() {
     }
   };
 
-  const handleOAuth = async (provider: "google" | "apple") => {
+  const handleGoogleLogin = async () => {
     try {
-      setOauthLoading(provider);
+      setOauthLoading("google");
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider,
+        provider: "google",
         options: {
           redirectTo,
           skipBrowserRedirect: true,
@@ -143,17 +147,67 @@ export default function LoginScreen() {
       if (!data?.url) throw new Error("No OAuth URL returned.");
 
       const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      const resultType = (res as any)?.type;
+
+      if (resultType === "cancel" || resultType === "dismiss") {
+        return;
+      }
 
       if (!isAuthSessionSuccess(res)) {
-        if ((res as any)?.type === "cancel" || (res as any)?.type === "dismiss") return;
-        throw new Error("Auth session did not succeed.");
+        throw new Error("Google auth session did not succeed.");
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace("/(auth)/callback");
+
+      router.replace({
+        pathname: "/(auth)/callback",
+        params: { authUrl: encodeURIComponent(res.url) },
+      });
     } catch (err: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Sign in failed", String(err?.message ?? "Please try again."));
+      Alert.alert("Google sign in failed", String(err?.message ?? "Please try again."));
+    } finally {
+      setOauthLoading(null);
+    }
+  };
+
+  const handleAppleLogin = async () => {
+    try {
+      setOauthLoading("apple");
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const rawNonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const hashedNonce = await sha256(rawNonce);
+
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+
+      if (!credential.identityToken) {
+        throw new Error("No Apple identity token returned.");
+      }
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+        nonce: rawNonce,
+      });
+
+      if (error) throw error;
+
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await routeAfterAuth();
+    } catch (err: any) {
+      if (err?.code === "ERR_REQUEST_CANCELED") {
+        return;
+      }
+
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Apple sign in failed", String(err?.message ?? "Please try again."));
     } finally {
       setOauthLoading(null);
     }
@@ -245,7 +299,7 @@ export default function LoginScreen() {
       </View>
 
       <TouchableOpacity
-        onPress={() => handleOAuth("google")}
+        onPress={handleGoogleLogin}
         disabled={!!oauthLoading || loading}
         style={{
           borderWidth: 1,
@@ -272,7 +326,7 @@ export default function LoginScreen() {
 
       {Platform.OS === "ios" && (
         <TouchableOpacity
-          onPress={() => handleOAuth("apple")}
+          onPress={handleAppleLogin}
           disabled={!!oauthLoading || loading}
           style={{
             borderWidth: 1,

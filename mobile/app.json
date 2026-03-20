@@ -2,14 +2,14 @@
   "expo": {
     "name": "Rest Assured",
     "slug": "rest-assured",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/rest-assured.png",
     "scheme": "restassurednative",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "buildNumber": "4",
+      "buildNumber": "10",
       "supportsTablet": true,
       "bundleIdentifier": "com.mrk.restassured",
       "usesAppleSignIn": true,
@@ -38,7 +38,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/rest-assured.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",

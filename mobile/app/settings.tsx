@@ -23,7 +23,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.2";
 
 export default function SettingsScreen() {
   const t = useAppTheme();

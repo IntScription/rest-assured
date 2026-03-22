@@ -2,15 +2,16 @@ import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAppTheme } from "@/src/theme/theme";
 
+
 export default function TabsLayout() {
   const t = useAppTheme();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         lazy: false,
-        unmountOnBlur: false,
-        detachInactiveScreens: false,
+        freezeOnBlur: false,
         tabBarStyle: {
           backgroundColor: t.tabBarBg,
           borderTopColor: t.tabBarBorder,

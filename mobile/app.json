@@ -2,14 +2,14 @@
   "expo": {
     "name": "Rest Assured",
     "slug": "rest-assured",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/rest-assured.png",
     "scheme": "restassurednative",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "buildNumber": "10",
+      "buildNumber": "18",
       "supportsTablet": true,
       "bundleIdentifier": "com.mrk.restassured",
       "usesAppleSignIn": true,
@@ -34,6 +34,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-notifications",
       "expo-apple-authentication",
       [
         "expo-splash-screen",

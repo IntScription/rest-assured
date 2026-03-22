@@ -1,7 +1,16 @@
-// app/(tabs)/index.tsx  (Home)
+// app/(tabs)/index.tsx
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, {
+  memo,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   View,
   Text,
@@ -11,14 +20,14 @@ import {
   ActivityIndicator,
   TextInput,
   Dimensions,
-  ScrollView,
   Animated as RNAnimated,
   Alert,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  ListRenderItem,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { supabase } from "@/src/lib/supabase";
 import { format } from "date-fns";
@@ -29,49 +38,232 @@ import { useIsOnline } from "@/hooks/use-is-online";
 import { cacheGetJson, cacheKey, cacheSetJson } from "@/src/lib/offline-cache";
 import type { Database } from "@/src/types/supabase";
 import type { User } from "@supabase/supabase-js";
+import OnboardingBanner from "@/src/components/OnboardingBanner";
+import {
+  getOnboardingStep,
+  isOnboardingActive,
+  setOnboardingStep,
+} from "@/src/lib/onboarding";
+import {
+  getActiveProgramSnapshot,
+  publishActiveProgram,
+  subscribeActiveProgram,
+} from "@/src/store/active-program";
 
 type Program = Database["public"]["Tables"]["programs"]["Row"];
 type SplitRow = Database["public"]["Tables"]["splits"]["Row"];
-type ExerciseRow = Database["public"]["Tables"]["exercises"]["Row"];
+type ExerciseRowDb = Database["public"]["Tables"]["exercises"]["Row"];
 type CycleRow = Database["public"]["Tables"]["program_cycles"]["Row"];
+type LogRow = Database["public"]["Tables"]["logs"]["Row"];
 
 type SplitLite = Pick<SplitRow, "id" | "name" | "focus" | "order_index">;
-type ExerciseLite = Pick<ExerciseRow, "id" | "name" | "slug">;
+type ExerciseLite = Pick<ExerciseRowDb, "id" | "name" | "slug">;
+type LatestLogLite = Pick<
+  LogRow,
+  "id" | "exercise_id" | "weight" | "reps" | "sets" | "created_at" | "type" | "day"
+>;
+
+type HomeCacheShape = {
+  splits: SplitLite[];
+  exercisesBySplit: Record<string, ExerciseLite[]>;
+  latestLogsByExercise: Record<string, LatestLogLite | null>;
+};
+
+type AppTheme = ReturnType<typeof useAppTheme>;
+
+type ExerciseRowProps = {
+  item: ExerciseLite;
+  index: number;
+  stackSize: number;
+  latestLog: LatestLogLite | null;
+  currentSplit: SplitLite | null;
+  uid: string;
+  t: AppTheme;
+  router: ReturnType<typeof useRouter>;
+  editingId: string | null;
+  setEditingId: Dispatch<SetStateAction<string | null>>;
+  editValue: string;
+  setEditValue: Dispatch<SetStateAction<string>>;
+  setExercisesBySplit: Dispatch<SetStateAction<Record<string, ExerciseLite[]>>>;
+};
+
+type SplitPageProps = {
+  item: SplitLite;
+  index: number;
+  listIndex: number;
+  t: AppTheme;
+  currentIndex: number;
+  splits: SplitLite[];
+  currentSplit: SplitLite | null;
+  activeSplitId: string | null;
+  completedSplits: string[];
+  toggleComplete: (splitId: string | null) => Promise<void>;
+  tourActive: boolean;
+  tourStep: string;
+  resolvedTutorialProgramId?: string;
+  router: ReturnType<typeof useRouter>;
+  setTourStep: Dispatch<SetStateAction<string>>;
+  exercises: ExerciseLite[];
+  latestLogsByExercise: Record<string, LatestLogLite | null>;
+  uid: string;
+  editingId: string | null;
+  setEditingId: Dispatch<SetStateAction<string | null>>;
+  editValue: string;
+  setEditValue: Dispatch<SetStateAction<string>>;
+  setExercisesBySplit: Dispatch<SetStateAction<Record<string, ExerciseLite[]>>>;
+};
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const EXERCISE_LIST_CONTENT_STYLE = { padding: 16 };
+
+/* ================= HELPERS ================= */
+function formatWeight(weight: number | string | null | undefined) {
+  const num = Number(weight ?? 0);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  if (Number.isInteger(num)) return `${num} kg`;
+  return `${num.toFixed(1)} kg`;
+}
+
+function formatLatestLog(log: LatestLogLite | null | undefined) {
+  if (!log) return "No logs yet";
+
+  const weightText = formatWeight(log.weight as number | string | null | undefined);
+  const repsText = `${log.reps} ${log.reps === 1 ? "rep" : "reps"}`;
+  const setsText = `${log.sets} ${log.sets === 1 ? "set" : "sets"}`;
+
+  if (weightText) return `Last: ${weightText} · ${repsText} · ${setsText}`;
+  return `Last: ${repsText} · ${setsText}`;
+}
 
 /* ================= HOOKS ================= */
 function useProgram(user: User | null) {
-  const [activeProgram, setActiveProgram] = useState<Program | null>(null);
+  const [activeProgram, setActiveProgram] = useState<Program | null>(() => getActiveProgramSnapshot());
+  const [programLoading, setProgramLoading] = useState(true);
 
-  const fetchProgram = useCallback(async () => {
-    if (!user) {
-      setActiveProgram(null);
-      return;
+  const normalizeProgram = useCallback((program: Program | null | undefined): Program | null => {
+    if (!program) return null;
+    return {
+      ...program,
+      created_at: program.created_at ?? null,
+      is_active: program.is_active ?? false,
+    } as Program;
+  }, []);
+
+  const lastPublishedProgramRef = useRef<Program | null>(getActiveProgramSnapshot());
+
+  const sameProgram = useCallback((a: Program | null | undefined, b: Program | null | undefined) => {
+    const left = normalizeProgram(a);
+    const right = normalizeProgram(b);
+
+    return (
+      left?.id === right?.id &&
+      left?.is_active === right?.is_active &&
+      left?.name === right?.name &&
+      left?.created_at === right?.created_at
+    );
+  }, [normalizeProgram]);
+
+  const applyProgram = useCallback(
+    (program: Program | null | undefined, options?: { publish?: boolean }) => {
+      const nextProgram = normalizeProgram(program);
+      setActiveProgram((prev) => {
+        const prevNormalized = normalizeProgram(prev);
+        if (sameProgram(prevNormalized, nextProgram)) {
+          return prevNormalized;
+        }
+        return nextProgram;
+      });
+
+      if (options?.publish !== false && !sameProgram(lastPublishedProgramRef.current, nextProgram)) {
+        lastPublishedProgramRef.current = nextProgram;
+        publishActiveProgram(nextProgram);
+      } else {
+        lastPublishedProgramRef.current = nextProgram;
+      }
+
+      setProgramLoading(false);
+      return nextProgram;
+    },
+    [normalizeProgram, sameProgram]
+  );
+
+  const fetchProgram = useCallback(
+    async (opts?: { silent?: boolean; preferredProgramId?: string | null }) => {
+      const silent = opts?.silent ?? false;
+      const preferredProgramId = opts?.preferredProgramId ?? getActiveProgramSnapshot()?.id ?? null;
+
+      if (!user) {
+        applyProgram(null);
+        return;
+      }
+
+      if (!silent) setProgramLoading(true);
+
+      if (preferredProgramId) {
+        const { data: preferredData, error: preferredError } = await supabase
+          .from("programs")
+          .select("*")
+          .eq("id", preferredProgramId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (!preferredError && preferredData) {
+          applyProgram({ ...(preferredData as Program), is_active: true } as Program);
+          return;
+        }
+      }
+
+      const { data, error } = await supabase
+        .from("programs")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        applyProgram(null);
+        return;
+      }
+
+      applyProgram((data ?? null) as Program | null);
+    },
+    [user, applyProgram]
+  );
+
+  useEffect(() => {
+    const snapshot = getActiveProgramSnapshot();
+    if (snapshot) {
+      applyProgram(snapshot, { publish: false });
     }
-
-    const { data, error } = await supabase
-      .from("programs")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (error) {
-      setActiveProgram(null);
-      return;
-    }
-
-    setActiveProgram(data ?? null);
-  }, [user]);
+    void fetchProgram({ silent: false, preferredProgramId: snapshot?.id ?? null });
+  }, [fetchProgram, applyProgram]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchProgram();
-    }, [fetchProgram])
+      const snapshot = getActiveProgramSnapshot();
+      if (snapshot) {
+        applyProgram(snapshot, { publish: false });
+      }
+      void fetchProgram({ silent: true, preferredProgramId: snapshot?.id ?? null });
+    }, [fetchProgram, applyProgram])
   );
 
-  return { activeProgram, fetchProgram };
+  useEffect(() => {
+    const unsubscribe = subscribeActiveProgram((program) => {
+      const nextProgram = applyProgram(program, { publish: false });
+      if (program?.id) {
+        void fetchProgram({ silent: true, preferredProgramId: program.id });
+      } else if (!nextProgram) {
+        void fetchProgram({ silent: true, preferredProgramId: null });
+      }
+    });
+
+    return unsubscribe;
+  }, [applyProgram, fetchProgram]);
+
+  return { activeProgram, programLoading, fetchProgram };
 }
 
 function useSplits(user: User | null, activeProgram: Program | null, isOnline: boolean) {
@@ -80,34 +272,47 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
   const [listIndex, setListIndex] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const startIndex = useMemo(() => (splits.length > 1 ? 1 : 0), [splits.length]);
-
-  // preserve selection across reorder/rename/refetch
   const currentSplitIdRef = useRef<string | null>(null);
+  const lastProgramIdRef = useRef<string | null>(null);
+  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     currentSplitIdRef.current = splits[currentIndex]?.id ?? null;
   }, [splits, currentIndex]);
 
-  // debounce for realtime events (drag reorder etc.)
-  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    currentSplitIdRef.current = null;
+    lastProgramIdRef.current = null;
+    setCurrentIndex(0);
+    setListIndex(0);
+    setSplits([]);
+    setLoading(Boolean(user && activeProgram && isOnline));
+  }, [activeProgram?.id, user?.id, isOnline]);
 
   const fetchSplits = useCallback(
-    async (opts?: { preserveSelection?: boolean }) => {
+    async (opts?: { preserveSelection?: boolean; silent?: boolean }) => {
+      const preserveSelection = opts?.preserveSelection ?? true;
+      const silent = opts?.silent ?? false;
+
       if (!user || !activeProgram) {
         setSplits([]);
         setCurrentIndex(0);
         setListIndex(0);
         setLoading(false);
+        currentSplitIdRef.current = null;
+        lastProgramIdRef.current = null;
         return;
       }
 
-      if (!isOnline && splits.length) {
+      if (!isOnline) {
         setLoading(false);
         return;
       }
 
-      const preserveSelection = opts?.preserveSelection ?? true;
-      const prevId = preserveSelection ? currentSplitIdRef.current : null;
+      if (!silent) setLoading(true);
+
+      const isNewProgram = lastProgramIdRef.current !== activeProgram.id;
+      const prevId = preserveSelection && !isNewProgram ? currentSplitIdRef.current : null;
 
       const { data, error } = await supabase
         .from("splits")
@@ -116,7 +321,10 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
         .eq("user_id", user.id)
         .order("order_index", { ascending: true });
 
-      if (error) return;
+      if (error) {
+        if (!silent) setLoading(false);
+        return;
+      }
 
       const nextSplits: SplitLite[] = (data ?? []).map((s: any) => ({
         id: s.id,
@@ -125,19 +333,25 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
         order_index: s.order_index,
       }));
 
-      setSplits(nextSplits);
-
       let nextCurrentIndex = 0;
+
       if (prevId) {
         const found = nextSplits.findIndex((s) => s.id === prevId);
-        if (found >= 0) nextCurrentIndex = found;
+        if (found >= 0) {
+          nextCurrentIndex = found;
+        }
       }
 
+      setSplits(nextSplits);
       setCurrentIndex(nextCurrentIndex);
-      setListIndex(nextSplits.length > 1 ? nextCurrentIndex + 1 : nextCurrentIndex);
+      setListIndex(nextSplits.length <= 1 ? nextCurrentIndex : nextCurrentIndex + 1);
+
       currentSplitIdRef.current = nextSplits[nextCurrentIndex]?.id ?? null;
+      lastProgramIdRef.current = activeProgram.id;
+
+      if (!silent) setLoading(false);
     },
-    [user, activeProgram, isOnline, splits.length]
+    [user, activeProgram, isOnline]
   );
 
   useEffect(() => {
@@ -149,22 +363,23 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
         setCurrentIndex(0);
         setListIndex(0);
         setLoading(false);
+        currentSplitIdRef.current = null;
+        lastProgramIdRef.current = null;
         return;
       }
 
       setLoading(true);
-      await fetchSplits({ preserveSelection: false });
+      await fetchSplits({ preserveSelection: true, silent: false });
       if (!mounted) return;
       setLoading(false);
     };
 
-    run();
+    void run();
 
     return () => {
       mounted = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, activeProgram?.id, isOnline]);
+  }, [user, activeProgram, isOnline, fetchSplits]);
 
   const loopedSplits = useMemo(() => {
     if (splits.length <= 1) return splits;
@@ -180,18 +395,52 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
     listIndex,
     setListIndex,
     loading,
-    startIndex,
     fetchSplits,
     refetchTimer,
   };
 }
 
-function useExercises(user: User | null, currentSplit: SplitLite | null, isOnline: boolean) {
+function useExercisesAndLatestLogs(
+  user: User | null,
+  currentSplit: SplitLite | null,
+  isOnline: boolean
+) {
   const [exercisesBySplit, setExercisesBySplit] = useState<Record<string, ExerciseLite[]>>({});
+  const [latestLogsByExercise, setLatestLogsByExercise] = useState<Record<string, LatestLogLite | null>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
   const fetchSeq = useRef(0);
+  const logsFetchSeq = useRef(0);
+
+  const fetchLatestLogsForExercises = useCallback(
+    async (exerciseIds: string[]) => {
+      if (!user || !isOnline || exerciseIds.length === 0) return;
+
+      const seq = ++logsFetchSeq.current;
+
+      const { data, error } = await supabase
+        .from("logs")
+        .select("id, exercise_id, weight, reps, sets, created_at, type, day")
+        .eq("user_id", user.id)
+        .in("exercise_id", exerciseIds)
+        .order("created_at", { ascending: false });
+
+      if (seq !== logsFetchSeq.current || error) return;
+
+      const nextMap: Record<string, LatestLogLite | null> = {};
+      for (const id of exerciseIds) nextMap[id] = null;
+
+      for (const row of (data ?? []) as LatestLogLite[]) {
+        if (!nextMap[row.exercise_id]) {
+          nextMap[row.exercise_id] = row;
+        }
+      }
+
+      setLatestLogsByExercise((prev) => ({ ...prev, ...nextMap }));
+    },
+    [user, isOnline]
+  );
 
   const fetchExercises = useCallback(
     (splitId: string | null) => {
@@ -207,8 +456,7 @@ function useExercises(user: User | null, currentSplit: SplitLite | null, isOnlin
           .eq("user_id", user.id)
           .order("id", { ascending: true });
 
-        if (seq !== fetchSeq.current) return;
-        if (error) return;
+        if (seq !== fetchSeq.current || error) return;
 
         const next: ExerciseLite[] = (data ?? []).map((e: any) => ({
           id: e.id,
@@ -217,22 +465,44 @@ function useExercises(user: User | null, currentSplit: SplitLite | null, isOnlin
         }));
 
         setExercisesBySplit((prev) => ({ ...prev, [splitId]: next }));
+
+        const exerciseIds = next.map((e) => e.id);
+        if (exerciseIds.length > 0) {
+          await fetchLatestLogsForExercises(exerciseIds);
+        }
       };
 
-      doFetch();
+      void doFetch();
     },
-    [user, isOnline]
+    [user, isOnline, fetchLatestLogsForExercises]
   );
 
   useEffect(() => {
-    if (currentSplit?.id) fetchExercises(currentSplit.id);
+    if (currentSplit?.id && !exercisesBySplit[currentSplit.id]) {
+      fetchExercises(currentSplit.id);
+    } else if (currentSplit?.id) {
+      const existing = exercisesBySplit[currentSplit.id] ?? [];
+      const missingLatest = existing.map((e) => e.id).filter((id) => !(id in latestLogsByExercise));
+      if (missingLatest.length > 0) {
+        void fetchLatestLogsForExercises(missingLatest);
+      }
+    }
+
     setEditingId(null);
     setEditValue("");
-  }, [currentSplit?.id, fetchExercises]);
+  }, [
+    currentSplit?.id,
+    exercisesBySplit,
+    latestLogsByExercise,
+    fetchExercises,
+    fetchLatestLogsForExercises,
+  ]);
 
   return {
     exercisesBySplit,
     setExercisesBySplit,
+    latestLogsByExercise,
+    setLatestLogsByExercise,
     editingId,
     setEditingId,
     editValue,
@@ -313,18 +583,17 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
 
   useFocusEffect(
     useCallback(() => {
-      ensureActiveCycle();
+      void ensureActiveCycle();
     }, [ensureActiveCycle])
   );
 
   useEffect(() => {
     if (!activeCycle) return;
-    fetchCompletedForCycle();
+    void fetchCompletedForCycle();
   }, [activeCycle, fetchCompletedForCycle]);
 
   const resetCycle = useCallback(async () => {
-    if (!user || !activeProgram || !activeCycle) return;
-    if (cycleBusyRef.current) return;
+    if (!user || !activeProgram || !activeCycle || cycleBusyRef.current) return;
     cycleBusyRef.current = true;
 
     try {
@@ -370,15 +639,14 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
 
   const toggleComplete = useCallback(
     async (splitId: string | null) => {
-      if (!user || !activeProgram || !activeCycle || !splitId) return;
-      if (cycleBusyRef.current) return;
+      if (!user || !activeProgram || !activeCycle || !splitId || cycleBusyRef.current) return;
 
       cycleBusyRef.current = true;
       try {
         const isCompleted = completedSplits.includes(splitId);
 
         if (isCompleted) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
           const { error: delErr } = await supabase
             .from("workout_sessions")
@@ -398,7 +666,7 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
           return;
         }
 
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
         const { error: insErr } = await supabase
           .from("workout_sessions")
@@ -419,7 +687,10 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
           return;
         }
 
-        const nextCompleted = completedSplits.includes(splitId) ? completedSplits : [...completedSplits, splitId];
+        const nextCompleted = completedSplits.includes(splitId)
+          ? completedSplits
+          : [...completedSplits, splitId];
+
         setCompletedSplits(nextCompleted);
 
         const total = splits.length;
@@ -443,23 +714,431 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
   };
 }
 
+/* ================= MEMOIZED ROWS ================= */
+const ExerciseRow = memo(function ExerciseRow({
+  item,
+  index,
+  stackSize,
+  latestLog,
+  currentSplit,
+  uid,
+  t,
+  router,
+  editingId,
+  setEditingId,
+  editValue,
+  setEditValue,
+  setExercisesBySplit,
+}: ExerciseRowProps) {
+  const isEditing = editingId === item.id;
+
+  const handleRename = useCallback(async () => {
+    if (!editValue.trim() || !currentSplit?.id || !uid) return;
+
+    const trimmed = editValue.trim();
+
+    const { error } = await supabase
+      .from("exercises")
+      .update({ name: trimmed })
+      .eq("id", item.id)
+      .eq("user_id", uid);
+
+    if (error) {
+      Alert.alert("Rename failed", error.message);
+      return;
+    }
+
+    setExercisesBySplit((prev) => {
+      const existing = prev[currentSplit.id] ?? [];
+      const next = existing.map((e) => (e.id === item.id ? { ...e, name: trimmed } : e));
+      return { ...prev, [currentSplit.id]: next };
+    });
+
+    setEditingId(null);
+    setEditValue("");
+  }, [editValue, currentSplit, uid, item.id, setExercisesBySplit, setEditingId, setEditValue]);
+
+  const handleDelete = useCallback(() => {
+    Alert.alert("Delete Exercise?", "This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          if (!currentSplit?.id || !uid) return;
+
+          const { error } = await supabase
+            .from("exercises")
+            .delete()
+            .eq("id", item.id)
+            .eq("user_id", uid);
+
+          if (error) {
+            Alert.alert("Delete failed", error.message);
+            return;
+          }
+
+          setExercisesBySplit((prev) => {
+            const existing = prev[currentSplit.id] ?? [];
+            return {
+              ...prev,
+              [currentSplit.id]: existing.filter((e) => e.id !== item.id),
+            };
+          });
+        },
+      },
+    ]);
+  }, [currentSplit, uid, item.id, setExercisesBySplit]);
+
+  const handleEditStart = useCallback(() => {
+    setEditingId(item.id);
+    setEditValue(item.name);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [item.id, item.name, setEditingId, setEditValue]);
+
+  const handleOpenExercise = useCallback(() => {
+    if (!item.slug) return;
+    router.push(`/exercise/${item.slug}`);
+  }, [item.slug, router]);
+
+  return (
+    <RNAnimated.View
+      style={[
+        styles.exerciseCard,
+        {
+          transform: [{ translateY: index * 4 }],
+          zIndex: stackSize - index,
+          backgroundColor: t.cardAlt,
+          borderColor: t.border,
+        },
+      ]}
+    >
+      <View style={styles.exerciseRow}>
+        {isEditing ? (
+          <TextInput
+            value={editValue}
+            onChangeText={setEditValue}
+            onSubmitEditing={handleRename}
+            style={[styles.exerciseInput, { color: t.text, borderColor: t.inputBorder }]}
+            autoFocus
+            returnKeyType="done"
+          />
+        ) : (
+          <TouchableOpacity
+            style={styles.exercisePressArea}
+            onPress={handleOpenExercise}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[styles.exerciseText, { color: t.text }]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {item.name}
+            </Text>
+            <Text
+              style={[styles.latestLogText, { color: t.mutedText }]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {formatLatestLog(latestLog)}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={styles.iconRow}>
+          <TouchableOpacity style={styles.iconButton} onPress={handleEditStart} hitSlop={10}>
+            <Ionicons name="create-outline" size={22} color={t.mutedText} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.iconButton} onPress={handleDelete} hitSlop={10}>
+            <Ionicons name="trash-outline" size={22} color={t.danger} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </RNAnimated.View>
+  );
+});
+
+function ExerciseList({
+  exercises,
+  latestLogsByExercise,
+  currentSplit,
+  uid,
+  t,
+  router,
+  editingId,
+  setEditingId,
+  editValue,
+  setEditValue,
+  setExercisesBySplit,
+}: {
+  exercises: ExerciseLite[];
+  latestLogsByExercise: Record<string, LatestLogLite | null>;
+  currentSplit: SplitLite | null;
+  uid: string;
+  t: AppTheme;
+  router: ReturnType<typeof useRouter>;
+  editingId: string | null;
+  setEditingId: Dispatch<SetStateAction<string | null>>;
+  editValue: string;
+  setEditValue: Dispatch<SetStateAction<string>>;
+  setExercisesBySplit: Dispatch<SetStateAction<Record<string, ExerciseLite[]>>>;
+}) {
+  const renderItem: ListRenderItem<ExerciseLite> = useCallback(
+    ({ item, index }) => (
+      <ExerciseRow
+        item={item}
+        index={index}
+        stackSize={exercises.length}
+        latestLog={latestLogsByExercise[item.id] ?? null}
+        currentSplit={currentSplit}
+        uid={uid}
+        t={t}
+        router={router}
+        editingId={editingId}
+        setEditingId={setEditingId}
+        editValue={editValue}
+        setEditValue={setEditValue}
+        setExercisesBySplit={setExercisesBySplit}
+      />
+    ),
+    [
+      exercises.length,
+      latestLogsByExercise,
+      currentSplit,
+      uid,
+      t,
+      router,
+      editingId,
+      setEditingId,
+      editValue,
+      setEditValue,
+      setExercisesBySplit,
+    ]
+  );
+
+  const keyExtractor = useCallback((item: ExerciseLite) => item.id, []);
+
+  if (exercises.length === 0) {
+    return (
+      <View style={styles.exerciseEmpty}>
+        <Text style={[styles.exerciseEmptyText, { color: t.mutedText }]}>
+          No exercises yet. Tap “Add Exercise”.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      data={exercises}
+      keyExtractor={keyExtractor}
+      renderItem={renderItem}
+      contentContainerStyle={EXERCISE_LIST_CONTENT_STYLE}
+      showsVerticalScrollIndicator={false}
+      removeClippedSubviews={false}
+      initialNumToRender={8}
+      maxToRenderPerBatch={8}
+      windowSize={7}
+      keyboardShouldPersistTaps="handled"
+    />
+  );
+}
+
+const SplitPage = memo(function SplitPage({
+  item,
+  index,
+  listIndex,
+  t,
+  currentIndex,
+  splits,
+  currentSplit,
+  activeSplitId,
+  completedSplits,
+  toggleComplete,
+  tourActive,
+  tourStep,
+  resolvedTutorialProgramId,
+  router,
+  setTourStep,
+  exercises,
+  latestLogsByExercise,
+  uid,
+  editingId,
+  setEditingId,
+  editValue,
+  setEditValue,
+  setExercisesBySplit,
+}: SplitPageProps) {
+  const isActivePage = index === listIndex;
+  const isCurrentVisibleSplit = item.id === activeSplitId;
+  const isCompleted = completedSplits.includes(item.id);
+
+  const handleAddExercise = useCallback(async () => {
+    if (!isCurrentVisibleSplit) return;
+
+    if (tourActive && tourStep === "go_home") {
+      await setOnboardingStep("create_exercise");
+      setTourStep("create_exercise");
+    }
+
+    router.push({
+      pathname: "/exercise/new",
+      params: {
+        splitId: item.id,
+        splitName: item.name,
+        tutorialProgramId: resolvedTutorialProgramId,
+        programId: resolvedTutorialProgramId,
+        tourStep: tourActive && tourStep === "go_home" ? "create_exercise" : undefined,
+      },
+    });
+  }, [
+    isCurrentVisibleSplit,
+    tourActive,
+    tourStep,
+    setTourStep,
+    router,
+    item.id,
+    item.name,
+    resolvedTutorialProgramId,
+  ]);
+
+  const handleToggleComplete = useCallback(() => {
+    void toggleComplete(item.id);
+  }, [toggleComplete, item.id]);
+
+  return (
+    <View style={styles.pageContainer}>
+      <RNAnimated.View style={[styles.topCard, { backgroundColor: t.card, borderColor: t.border }]}>
+        <Text style={[styles.splitTitle, { color: t.text }]} numberOfLines={1}>
+          {item.name}
+        </Text>
+
+        {item.focus ? (
+          <Text style={[styles.focus, { color: t.mutedText }]}>{item.focus}</Text>
+        ) : null}
+
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={[
+              styles.primaryButton,
+              { backgroundColor: t.primaryBg },
+              !isCurrentVisibleSplit && styles.disabledButton,
+            ]}
+            onPress={handleAddExercise}
+            disabled={!isCurrentVisibleSplit}
+          >
+            <Text style={[styles.primaryText, { color: t.primaryText }]}>Add Exercise</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.secondaryButton,
+              { backgroundColor: t.secondaryBg },
+              isCompleted && { backgroundColor: t.success },
+            ]}
+            onPress={handleToggleComplete}
+            disabled={item.id !== activeSplitId}
+          >
+            <Text style={[styles.secondaryText, { color: t.secondaryText }]}>
+              {isCompleted ? "Completed ✓" : "Mark Complete"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.dotsRow}>
+          {splits.map((split, dotIndex) => {
+            const isActiveDot = dotIndex === currentIndex;
+            const isCompletedDot = completedSplits.includes(split.id);
+
+            return (
+              <View
+                key={split.id}
+                style={[
+                  styles.dot,
+                  {
+                    backgroundColor: isCompletedDot
+                      ? t.success
+                      : isActiveDot
+                        ? t.text
+                        : t.border,
+                    transform: [{ scale: isActiveDot ? 1.15 : 1 }],
+                    opacity: isActiveDot || isCompletedDot ? 1 : 0.9,
+                  },
+                ]}
+              />
+            );
+          })}
+        </View>
+      </RNAnimated.View>
+
+      {isActivePage ? (
+        <RNAnimated.View
+          style={[
+            styles.exerciseCardWrapper,
+            { backgroundColor: t.card, borderColor: t.border },
+          ]}
+        >
+          <ExerciseList
+            exercises={exercises}
+            latestLogsByExercise={latestLogsByExercise}
+            currentSplit={currentSplit}
+            uid={uid}
+            t={t}
+            router={router}
+            editingId={editingId}
+            setEditingId={setEditingId}
+            editValue={editValue}
+            setEditValue={setEditValue}
+            setExercisesBySplit={setExercisesBySplit}
+          />
+        </RNAnimated.View>
+      ) : null}
+    </View>
+  );
+});
+
 /* ================= HOME SCREEN ================= */
 export default function HomeScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    tutorialProgramId?: string | string[];
+    programId?: string | string[];
+  }>();
   const t = useAppTheme();
   const isOnline = useIsOnline();
 
+  const tutorialProgramId = useMemo(
+    () => (Array.isArray(params.tutorialProgramId) ? params.tutorialProgramId[0] : params.tutorialProgramId),
+    [params.tutorialProgramId]
+  );
+  const fallbackProgramId = useMemo(
+    () => (Array.isArray(params.programId) ? params.programId[0] : params.programId),
+    [params.programId]
+  );
+
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
+  const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
-  // stable refs used by realtime callbacks (avoid effect teardown loops)
-  const fetchProgramRef = useRef<() => Promise<void>>(async () => { });
-  const fetchSplitsRef = useRef<(opts?: { preserveSelection?: boolean }) => Promise<void>>(async () => { });
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStep, setTourStep] = useState<string>("idle");
+
+  const fetchProgramRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>(async () => { });
+  const fetchSplitsRef = useRef<
+    (opts?: { preserveSelection?: boolean; silent?: boolean }) => Promise<void>
+  >(async () => { });
   const fetchExercisesRef = useRef<(splitId: string | null) => void>(() => { });
   const ensureActiveCycleRef = useRef<() => Promise<void>>(async () => { });
   const fetchCompletedForCycleRef = useRef<() => Promise<void>>(async () => { });
-
   const rtKeyRef = useRef<string>("");
+
+  const flatListRef = useRef<FlatList<SplitLite>>(null);
+  const parallaxAnim = useRef(new RNAnimated.Value(0)).current;
+  const didSetInitialOffsetRef = useRef(false);
+  const lastSyncedOffsetRef = useRef<number | null>(null);
 
   /* ================= AUTH ================= */
   useEffect(() => {
@@ -469,18 +1148,18 @@ export default function HomeScreen() {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
 
-      const u = data.session?.user ?? null;
-      setUser(u);
+      const nextUser = data.session?.user ?? null;
+      setUser(nextUser);
       setBooting(false);
 
-      if (!u) router.replace("/login");
+      if (!nextUser) router.replace("/login");
     })();
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user ?? null;
-      setUser(u);
+      const nextUser = session?.user ?? null;
+      setUser(nextUser);
       setBooting(false);
-      if (!u) router.replace("/login");
+      if (!nextUser) router.replace("/login");
     });
 
     return () => {
@@ -492,7 +1171,7 @@ export default function HomeScreen() {
   const uid = user?.id ?? "";
 
   /* ================= HOOKS ================= */
-  const { activeProgram, fetchProgram } = useProgram(user);
+  const { activeProgram, programLoading, fetchProgram } = useProgram(user);
 
   const {
     splits,
@@ -503,85 +1182,187 @@ export default function HomeScreen() {
     listIndex,
     setListIndex,
     loading,
-    startIndex,
     fetchSplits,
     refetchTimer,
   } = useSplits(user, activeProgram, isOnline);
 
   const currentSplit = splits[currentIndex] ?? null;
+  const resolvedTutorialProgramId = tutorialProgramId || fallbackProgramId || activeProgram?.id || undefined;
 
-  const { exercisesBySplit, setExercisesBySplit, editingId, setEditingId, editValue, setEditValue, fetchExercises } =
-    useExercises(user, currentSplit, isOnline);
+  const {
+    exercisesBySplit,
+    setExercisesBySplit,
+    latestLogsByExercise,
+    setLatestLogsByExercise,
+    editingId,
+    setEditingId,
+    editValue,
+    setEditValue,
+    fetchExercises,
+  } = useExercisesAndLatestLogs(user, currentSplit, isOnline);
 
-  const { completedSplits, ensureActiveCycle, fetchCompletedForCycle, toggleComplete, resetCycle, cycleDone, setCycleDone } =
-    useWorkoutCycles(user, activeProgram, splits);
+  const {
+    completedSplits,
+    ensureActiveCycle,
+    fetchCompletedForCycle,
+    toggleComplete,
+    resetCycle,
+    cycleDone,
+    setCycleDone,
+  } = useWorkoutCycles(user, activeProgram, splits);
 
-  // keep refs updated
   useEffect(() => {
     fetchProgramRef.current = fetchProgram;
   }, [fetchProgram]);
+
   useEffect(() => {
     fetchSplitsRef.current = fetchSplits;
   }, [fetchSplits]);
+
   useEffect(() => {
     fetchExercisesRef.current = fetchExercises;
   }, [fetchExercises]);
+
   useEffect(() => {
     ensureActiveCycleRef.current = ensureActiveCycle;
   }, [ensureActiveCycle]);
+
   useEffect(() => {
     fetchCompletedForCycleRef.current = fetchCompletedForCycle;
   }, [fetchCompletedForCycle]);
 
+  useEffect(() => {
+    didSetInitialOffsetRef.current = false;
+    lastSyncedOffsetRef.current = null;
+    parallaxAnim.setValue(0);
+    setCurrentIndex(0);
+    setListIndex(0);
+    setExercisesBySplit({});
+    setLatestLogsByExercise({});
+    setEditingId(null);
+    setEditValue("");
+  }, [
+    activeProgram?.id,
+    parallaxAnim,
+    setCurrentIndex,
+    setListIndex,
+    setExercisesBySplit,
+    setLatestLogsByExercise,
+    setEditingId,
+    setEditValue,
+  ]);
+
   useFocusEffect(
     useCallback(() => {
-      ensureActiveCycle();
-      fetchCompletedForCycle();
+      void ensureActiveCycle();
+      void fetchCompletedForCycle();
     }, [ensureActiveCycle, fetchCompletedForCycle])
   );
 
-  /* ================= CACHE LOAD/SAVE ================= */
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+
+      const loadTour = async () => {
+        const active = await isOnboardingActive();
+        const step = await getOnboardingStep();
+
+        if (!mounted) return;
+        setTourActive(active);
+        setTourStep(typeof step === "string" ? step : "idle");
+      };
+
+      void loadTour();
+
+      return () => {
+        mounted = false;
+      };
+    }, [])
+  );
+
+  /* ================= FIRST-LOAD GATING ================= */
   useEffect(() => {
-    if (!uid || !activeProgram) return;
-
-    (async () => {
-      const cached = await cacheGetJson<{
-        splits: SplitLite[];
-        exercisesBySplit: Record<string, ExerciseLite[]>;
-      }>(cacheKey(["home", uid, activeProgram.id]));
-
-      if (!cached) return;
-
-      if (cached.splits?.length) setSplits(cached.splits);
-      if (cached.exercisesBySplit) setExercisesBySplit(cached.exercisesBySplit);
-    })();
-  }, [uid, activeProgram?.id, setExercisesBySplit, setSplits]);
+    setInitialDataLoaded(false);
+  }, [uid, activeProgram?.id]);
 
   useEffect(() => {
-    if (!uid || !activeProgram) return;
+    if (!booting && cacheHydrated && !programLoading && !loading) {
+      setInitialDataLoaded(true);
+    }
+  }, [booting, cacheHydrated, programLoading, loading]);
 
-    cacheSetJson(cacheKey(["home", uid, activeProgram.id]), {
+  /* ================= CACHE ================= */
+  const homeCacheKey = useMemo(() => {
+    if (!uid || !activeProgram?.id) return null;
+    return cacheKey(["home", uid, activeProgram.id]);
+  }, [uid, activeProgram?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      if (!homeCacheKey || !activeProgram) {
+        setCacheHydrated(true);
+        return;
+      }
+
+      setCacheHydrated(false);
+
+      const cached = await cacheGetJson<HomeCacheShape>(homeCacheKey);
+      if (cancelled) return;
+
+      if (cached?.splits?.length) {
+        setSplits(cached.splits);
+      }
+
+      if (cached?.exercisesBySplit) {
+        setExercisesBySplit(cached.exercisesBySplit);
+      }
+
+      if (cached?.latestLogsByExercise) {
+        setLatestLogsByExercise(cached.latestLogsByExercise);
+      }
+
+      setCacheHydrated(true);
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [homeCacheKey, activeProgram, setExercisesBySplit, setLatestLogsByExercise, setSplits]);
+
+  useEffect(() => {
+    if (!homeCacheKey) return;
+
+    void cacheSetJson(homeCacheKey, {
       splits,
       exercisesBySplit,
+      latestLogsByExercise,
     });
-  }, [uid, activeProgram?.id, splits, exercisesBySplit]);
+  }, [homeCacheKey, splits, exercisesBySplit, latestLogsByExercise]);
 
-  /* ================= REALTIME (CLEAN + FILTERED) ================= */
+  /* ================= REALTIME ================= */
   useEffect(() => {
     if (!uid) return;
 
     const pid = activeProgram?.id ?? null;
     const sid = currentSplit?.id ?? null;
-
     const key = `${uid}:${pid ?? "none"}:${sid ?? "none"}`;
-    if (rtKeyRef.current === key) return; // ✅ don't resubscribe unnecessarily
+
+    if (rtKeyRef.current === key) return;
     rtKeyRef.current = key;
 
     const programsCh = supabase
       .channel(`programs:${uid}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "programs", filter: `user_id=eq.${uid}` }, () => {
-        fetchProgramRef.current();
-      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "programs", filter: `user_id=eq.${uid}` },
+        () => {
+          void fetchProgramRef.current({ silent: true });
+        }
+      )
       .subscribe();
 
     const splitsCh =
@@ -595,8 +1376,8 @@ export default function HomeScreen() {
             () => {
               if (refetchTimer.current) clearTimeout(refetchTimer.current);
               refetchTimer.current = setTimeout(() => {
-                fetchSplitsRef.current({ preserveSelection: true });
-              }, 80);
+                void fetchSplitsRef.current({ preserveSelection: true, silent: true });
+              }, 100);
             }
           )
           .subscribe();
@@ -615,14 +1396,27 @@ export default function HomeScreen() {
           )
           .subscribe();
 
+    const logsCh = supabase
+      .channel(`logs:${uid}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "logs", filter: `user_id=eq.${uid}` },
+        () => {
+          if (currentSplit?.id) {
+            fetchExercisesRef.current(currentSplit.id);
+          }
+        }
+      )
+      .subscribe();
+
     const cyclesCh = supabase
       .channel(`cycles:${uid}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "program_cycles", filter: `user_id=eq.${uid}` },
         () => {
-          ensureActiveCycleRef.current();
-          fetchCompletedForCycleRef.current();
+          void ensureActiveCycleRef.current();
+          void fetchCompletedForCycleRef.current();
         }
       )
       .subscribe();
@@ -633,7 +1427,7 @@ export default function HomeScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "workout_sessions", filter: `user_id=eq.${uid}` },
         () => {
-          fetchCompletedForCycleRef.current();
+          void fetchCompletedForCycleRef.current();
         }
       )
       .subscribe();
@@ -641,68 +1435,65 @@ export default function HomeScreen() {
     return () => {
       if (refetchTimer.current) clearTimeout(refetchTimer.current);
 
-      supabase.removeChannel(programsCh);
-      if (splitsCh) supabase.removeChannel(splitsCh);
-      if (exercisesCh) supabase.removeChannel(exercisesCh);
-      supabase.removeChannel(cyclesCh);
-      supabase.removeChannel(sessionsCh);
+      void supabase.removeChannel(programsCh);
+      if (splitsCh) void supabase.removeChannel(splitsCh);
+      if (exercisesCh) void supabase.removeChannel(exercisesCh);
+      void supabase.removeChannel(logsCh);
+      void supabase.removeChannel(cyclesCh);
+      void supabase.removeChannel(sessionsCh);
     };
-  }, [uid, activeProgram?.id, currentSplit?.id]);
+  }, [uid, activeProgram?.id, currentSplit?.id, refetchTimer]);
 
-  /* ================= LOOPED CAROUSEL INIT ================= */
-  const flatListRef = useRef<FlatList<SplitLite>>(null);
-  const parallaxAnim = useRef(new RNAnimated.Value(0)).current;
+  /* ================= CAROUSEL ================= */
+  const handleCarouselLayout = useCallback(() => {
+    if (splits.length === 0 || didSetInitialOffsetRef.current) return;
 
-  const [listReady, setListReady] = useState(false);
-  const didInitRef = useRef(false);
+    didSetInitialOffsetRef.current = true;
 
-  useEffect(() => {
-    didInitRef.current = false;
-    setListReady(false);
-
-    const nextStart = splits.length > 1 ? 1 : 0;
-    setCurrentIndex(0);
-    setListIndex(nextStart);
+    const targetIndex = splits.length > 1 ? currentIndex + 1 : currentIndex;
+    const targetOffset = SCREEN_WIDTH * targetIndex;
 
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToOffset({
-        offset: SCREEN_WIDTH * nextStart,
+        offset: targetOffset,
         animated: false,
       });
-      setListReady(true);
+      lastSyncedOffsetRef.current = targetOffset;
+      setListIndex(targetIndex);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [splits.length]);
+  }, [splits.length, currentIndex, setListIndex]);
 
   useEffect(() => {
-    didInitRef.current = false;
-    setListReady(false);
-  }, [activeProgram?.id, splits.length]);
-
-  const initialX = useMemo(() => SCREEN_WIDTH * startIndex, [startIndex]);
-
-  const handleListLayout = useCallback(() => {
-    if (splits.length <= 1) {
-      setListReady(true);
+    if (splits.length === 0) {
+      didSetInitialOffsetRef.current = false;
+      lastSyncedOffsetRef.current = null;
       return;
     }
-    if (didInitRef.current) return;
-    didInitRef.current = true;
+
+    if (!didSetInitialOffsetRef.current) return;
+
+    const targetListIndex = splits.length > 1 ? currentIndex + 1 : currentIndex;
+    const targetOffset = SCREEN_WIDTH * targetListIndex;
+
+    if (lastSyncedOffsetRef.current === targetOffset) return;
 
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToOffset({
-        offset: SCREEN_WIDTH * startIndex,
+        offset: targetOffset,
         animated: false,
       });
-      setListIndex(startIndex);
-      setCurrentIndex(0);
-      setListReady(true);
+      lastSyncedOffsetRef.current = targetOffset;
+      setListIndex(targetListIndex);
     });
-  }, [splits.length, setCurrentIndex, setListIndex, startIndex]);
+  }, [splits.length, currentIndex, setListIndex]);
 
-  const onScroll = RNAnimated.event([{ nativeEvent: { contentOffset: { x: parallaxAnim } } }], {
-    useNativeDriver: true,
-  });
+  const onScroll = useMemo(
+    () =>
+      RNAnimated.event([{ nativeEvent: { contentOffset: { x: parallaxAnim } } }], {
+        useNativeDriver: true,
+      }),
+    [parallaxAnim]
+  );
 
   const onMomentumScrollEnd = useCallback(
     (ev: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -711,49 +1502,112 @@ export default function HomeScreen() {
       const rawIndex = Math.round(ev.nativeEvent.contentOffset.x / SCREEN_WIDTH);
 
       if (splits.length <= 1) {
-        const clamped = Math.max(0, Math.min(rawIndex, splits.length - 1));
-        setListIndex(clamped);
-        setCurrentIndex(clamped);
+        setListIndex(0);
+        setCurrentIndex(0);
+        lastSyncedOffsetRef.current = 0;
         return;
       }
 
-      const loopLen = splits.length + 2;
+      const loopLastIndex = splits.length + 1;
 
       if (rawIndex <= 0) {
-        const target = splits.length;
-        setListIndex(target);
+        const targetListIndex = splits.length;
+        const targetOffset = SCREEN_WIDTH * targetListIndex;
+
+        setListIndex(targetListIndex);
         setCurrentIndex(splits.length - 1);
+        lastSyncedOffsetRef.current = targetOffset;
+
         requestAnimationFrame(() => {
-          flatListRef.current?.scrollToOffset({ offset: SCREEN_WIDTH * target, animated: false });
+          flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
         });
         return;
       }
 
-      if (rawIndex >= loopLen - 1) {
-        const target = 1;
-        setListIndex(target);
+      if (rawIndex >= loopLastIndex) {
+        const targetListIndex = 1;
+        const targetOffset = SCREEN_WIDTH * targetListIndex;
+
+        setListIndex(targetListIndex);
         setCurrentIndex(0);
+        lastSyncedOffsetRef.current = targetOffset;
 
         requestAnimationFrame(() => {
-          flatListRef.current?.scrollToOffset({ offset: SCREEN_WIDTH * target, animated: false });
+          flatListRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
 
           if (cycleDone) {
-            resetCycle();
+            void resetCycle();
             setCycleDone(false);
           }
         });
-
         return;
       }
 
       setListIndex(rawIndex);
       setCurrentIndex(rawIndex - 1);
+      lastSyncedOffsetRef.current = SCREEN_WIDTH * rawIndex;
     },
-    [splits.length, setCurrentIndex, setListIndex, cycleDone, resetCycle, setCycleDone]
+    [splits.length, cycleDone, resetCycle, setCycleDone, setCurrentIndex, setListIndex]
   );
 
+  const renderSplitPage: ListRenderItem<SplitLite> = useCallback(
+    ({ item, index }) => (
+      <SplitPage
+        item={item}
+        index={index}
+        listIndex={listIndex}
+        t={t}
+        currentIndex={currentIndex}
+        splits={splits}
+        currentSplit={currentSplit}
+        activeSplitId={currentSplit?.id ?? null}
+        completedSplits={completedSplits}
+        toggleComplete={toggleComplete}
+        tourActive={tourActive}
+        tourStep={tourStep}
+        resolvedTutorialProgramId={resolvedTutorialProgramId}
+        router={router}
+        setTourStep={setTourStep}
+        exercises={exercisesBySplit[item.id] ?? []}
+        latestLogsByExercise={latestLogsByExercise}
+        uid={uid}
+        editingId={editingId}
+        setEditingId={setEditingId}
+        editValue={editValue}
+        setEditValue={setEditValue}
+        setExercisesBySplit={setExercisesBySplit}
+      />
+    ),
+    [
+      listIndex,
+      t,
+      currentIndex,
+      splits,
+      currentSplit,
+      completedSplits,
+      toggleComplete,
+      tourActive,
+      tourStep,
+      resolvedTutorialProgramId,
+      router,
+      setTourStep,
+      exercisesBySplit,
+      latestLogsByExercise,
+      uid,
+      editingId,
+      setEditingId,
+      editValue,
+      setEditValue,
+      setExercisesBySplit,
+    ]
+  );
+
+  const splitKeyExtractor = useCallback((item: SplitLite, index: number) => `${item.id}:${index}`, []);
+
   /* ================= UI ================= */
-  if (booting || loading) {
+  const screenBusy = !initialDataLoaded && (booting || programLoading || !cacheHydrated || loading);
+
+  if (screenBusy) {
     return (
       <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
         <ActivityIndicator size="large" color={t.text} />
@@ -765,12 +1619,12 @@ export default function HomeScreen() {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: t.background }]} edges={["top"]}>
         <View style={styles.emptyState}>
-          <Text style={{ color: t.mutedText, fontSize: 16, textAlign: "center", paddingHorizontal: 22 }}>
+          <Text style={[styles.emptyText, { color: t.mutedText }]}>
             No splits found. Create a program and add splits from the Profile tab.
           </Text>
 
-          <TouchableOpacity onPress={() => router.push("/profile")} activeOpacity={0.85} style={{ marginTop: 12 }}>
-            <Text style={{ color: "#3B82F6", fontSize: 16, fontWeight: "700" }}>Go to Profile</Text>
+          <TouchableOpacity onPress={() => router.push("/profile")} activeOpacity={0.85} style={styles.emptyCta}>
+            <Text style={styles.emptyCtaText}>Go to Profile</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -781,7 +1635,36 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: t.background }]} edges={["top"]}>
-      <View style={{ flex: 1, opacity: listReady ? 1 : 0 }} onLayout={handleListLayout}>
+      <View style={styles.flexFill} onLayout={handleCarouselLayout}>
+        {tourActive && tourStep === "go_home" ? (
+          <View style={styles.tourBannerWrap}>
+            <OnboardingBanner
+              t={t}
+              title="Add your first exercise"
+              body="Open your current split and create your first exercise. After that, you’ll go to the log page."
+              primaryLabel="Create exercise"
+              onPrimary={async () => {
+                const split = currentSplit;
+                if (!split) return;
+
+                await setOnboardingStep("create_exercise");
+                setTourStep("create_exercise");
+
+                router.push({
+                  pathname: "/exercise/new",
+                  params: {
+                    splitId: split.id,
+                    splitName: split.name,
+                    tutorialProgramId: resolvedTutorialProgramId,
+                    programId: resolvedTutorialProgramId,
+                    tourStep: "create_exercise",
+                  },
+                });
+              }}
+            />
+          </View>
+        ) : null}
+
         <RNAnimated.FlatList
           key={carouselKey}
           ref={flatListRef}
@@ -789,8 +1672,12 @@ export default function HomeScreen() {
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
-          keyExtractor={(item, index) => `${item.id}:${index}`}
-          getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+          keyExtractor={splitKeyExtractor}
+          getItemLayout={(_, index) => ({
+            length: SCREEN_WIDTH,
+            offset: SCREEN_WIDTH * index,
+            index,
+          })}
           removeClippedSubviews={false}
           windowSize={3}
           onScroll={onScroll}
@@ -799,183 +1686,7 @@ export default function HomeScreen() {
           initialNumToRender={3}
           maxToRenderPerBatch={3}
           updateCellsBatchingPeriod={16}
-          renderItem={({ item, index }) => {
-            const isActivePage = index === listIndex;
-            const exercises = exercisesBySplit[item.id] ?? [];
-
-            return (
-              <View style={{ width: SCREEN_WIDTH, paddingHorizontal: 16 }}>
-                {/* TOP CARD */}
-                <RNAnimated.View style={[styles.topCard, { backgroundColor: t.card, borderColor: t.border }]}>
-                  <Text style={[styles.splitTitle, { color: t.text }]} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  {item.focus ? <Text style={[styles.focus, { color: t.mutedText }]}>{item.focus}</Text> : null}
-
-                  <View style={styles.actions}>
-                    <TouchableOpacity
-                      style={[styles.primaryButton, { backgroundColor: t.primaryBg }]}
-                      onPress={() => router.push("/exercise/new")}
-                    >
-                      <Text style={[styles.primaryText, { color: t.primaryText }]}>Add Exercise</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.secondaryButton,
-                        { backgroundColor: t.secondaryBg },
-                        completedSplits.includes(item.id) && { backgroundColor: t.success },
-                      ]}
-                      onPress={() => toggleComplete(item.id)}
-                      disabled={item.id !== currentSplit?.id}
-                    >
-                      <Text style={[styles.secondaryText, { color: t.secondaryText }]}>
-                        {completedSplits.includes(item.id) ? "Completed ✓" : "Mark Complete"}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.dotsRow}>
-                    {splits.map((s: SplitLite, i: number) => (
-                      <View
-                        key={s.id}
-                        style={[
-                          styles.dot,
-                          i === currentIndex && { backgroundColor: t.text },
-                          completedSplits.includes(s.id) && { backgroundColor: t.success },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                </RNAnimated.View>
-
-                {/* EXERCISES */}
-                {isActivePage && (
-                  <RNAnimated.View style={[styles.exerciseCardWrapper, { backgroundColor: t.card, borderColor: t.border }]}>
-                    {exercises.length === 0 ? (
-                      <View style={styles.exerciseEmpty}>
-                        <Text style={[styles.exerciseEmptyText, { color: t.mutedText }]}>No exercises yet. Tap “Add Exercise”.</Text>
-                      </View>
-                    ) : (
-                      <ScrollView contentContainerStyle={{ padding: 16 }} showsVerticalScrollIndicator={false}>
-                        {exercises.map((ex: ExerciseLite, i: number) => (
-                          <RNAnimated.View
-                            key={ex.id}
-                            style={[
-                              styles.exerciseCard,
-                              {
-                                transform: [{ translateY: i * 4 }],
-                                zIndex: exercises.length - i,
-                                backgroundColor: t.cardAlt,
-                                borderColor: t.border,
-                              },
-                            ]}
-                          >
-                            <View style={styles.exerciseRow}>
-                              {editingId === ex.id ? (
-                                <TextInput
-                                  value={editValue}
-                                  onChangeText={setEditValue}
-                                  onSubmitEditing={async () => {
-                                    if (!editValue.trim() || !currentSplit?.id || !uid) return;
-
-                                    const { error } = await supabase
-                                      .from("exercises")
-                                      .update({ name: editValue })
-                                      .eq("id", ex.id)
-                                      .eq("user_id", uid);
-
-                                    if (error) {
-                                      Alert.alert("Rename failed", error.message);
-                                      return;
-                                    }
-
-                                    setExercisesBySplit((prev) => {
-                                      const existing = prev[currentSplit.id] ?? [];
-                                      const next = existing.map((e) => (e.id === ex.id ? { ...e, name: editValue } : e));
-                                      return { ...prev, [currentSplit.id]: next };
-                                    });
-
-                                    setEditingId(null);
-                                    setEditValue("");
-                                  }}
-                                  style={[styles.exerciseInput, { color: t.text, borderColor: t.inputBorder }]}
-                                  autoFocus
-                                  returnKeyType="done"
-                                />
-                              ) : (
-                                <TouchableOpacity
-                                  style={styles.exercisePressArea}
-                                  onPress={() => {
-                                    if (!ex.slug) return;
-                                    router.push(`/exercise/${ex.slug}`);
-                                  }}
-                                  activeOpacity={0.85}
-                                >
-                                  <Text style={[styles.exerciseText, { color: t.text }]} numberOfLines={1} ellipsizeMode="tail">
-                                    {ex.name}
-                                  </Text>
-                                </TouchableOpacity>
-                              )}
-
-                              <View style={styles.iconRow}>
-                                <TouchableOpacity
-                                  style={styles.iconButton}
-                                  onPress={() => {
-                                    setEditingId(ex.id);
-                                    setEditValue(ex.name);
-                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                  }}
-                                  hitSlop={10}
-                                >
-                                  <Ionicons name="create-outline" size={22} color={t.mutedText} />
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                  style={styles.iconButton}
-                                  onPress={() =>
-                                    Alert.alert("Delete Exercise?", "This cannot be undone.", [
-                                      { text: "Cancel", style: "cancel" },
-                                      {
-                                        text: "Delete",
-                                        style: "destructive",
-                                        onPress: async () => {
-                                          if (!currentSplit?.id || !uid) return;
-
-                                          const { error } = await supabase
-                                            .from("exercises")
-                                            .delete()
-                                            .eq("id", ex.id)
-                                            .eq("user_id", uid);
-
-                                          if (error) {
-                                            Alert.alert("Delete failed", error.message);
-                                            return;
-                                          }
-
-                                          setExercisesBySplit((prev) => {
-                                            const existing = prev[currentSplit.id] ?? [];
-                                            return { ...prev, [currentSplit.id]: existing.filter((e) => e.id !== ex.id) };
-                                          });
-                                        },
-                                      },
-                                    ])
-                                  }
-                                  hitSlop={10}
-                                >
-                                  <Ionicons name="trash-outline" size={22} color={t.danger} />
-                                </TouchableOpacity>
-                              </View>
-                            </View>
-                          </RNAnimated.View>
-                        ))}
-                      </ScrollView>
-                    )}
-                  </RNAnimated.View>
-                )}
-              </View>
-            );
-          }}
+          renderItem={renderSplitPage}
         />
       </View>
     </SafeAreaView>
@@ -985,8 +1696,26 @@ export default function HomeScreen() {
 /* ================= STYLES ================= */
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  flexFill: { flex: 1 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   emptyState: { flex: 1, justifyContent: "center", alignItems: "center" },
+  emptyText: {
+    fontSize: 16,
+    textAlign: "center",
+    paddingHorizontal: 22,
+  },
+  emptyCta: { marginTop: 12 },
+  emptyCtaText: { color: "#3B82F6", fontSize: 16, fontWeight: "700" },
+
+  tourBannerWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+
+  pageContainer: {
+    width: SCREEN_WIDTH,
+    paddingHorizontal: 16,
+  },
 
   topCard: { padding: 20, borderRadius: 22, marginVertical: 12, borderWidth: 1 },
   splitTitle: { fontSize: 22, fontWeight: "600" },
@@ -997,9 +1726,10 @@ const styles = StyleSheet.create({
   primaryText: { fontWeight: "700" },
   secondaryButton: { padding: 12, borderRadius: 14, flex: 1, alignItems: "center" },
   secondaryText: { fontWeight: "700" },
+  disabledButton: { opacity: 0.55 },
 
   dotsRow: { flexDirection: "row", gap: 6, marginTop: 14 },
-  dot: { width: 8, height: 8, borderRadius: 999, backgroundColor: "#333" },
+  dot: { width: 9, height: 9, borderRadius: 999 },
 
   exerciseCardWrapper: {
     flex: 1,
@@ -1007,6 +1737,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
     overflow: "hidden",
+    minHeight: 220,
   },
   exerciseEmpty: { flex: 1, padding: 16, alignItems: "center", justifyContent: "center" },
   exerciseEmptyText: { fontSize: 14 },
@@ -1019,9 +1750,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     width: "100%",
   },
-  exerciseRow: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 28 },
+  exerciseRow: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 40 },
   exercisePressArea: { flex: 1, justifyContent: "center" },
   exerciseText: { fontSize: 16, fontWeight: "600", letterSpacing: 0.2 },
+  latestLogText: { marginTop: 4, fontSize: 12, fontWeight: "500" },
 
   iconRow: { flexDirection: "row", gap: 12, alignItems: "center" },
   iconButton: { width: 34, height: 34, alignItems: "center", justifyContent: "center" },
@@ -1034,3 +1766,4 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
 });
+

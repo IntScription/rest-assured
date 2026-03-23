@@ -76,7 +76,7 @@ rest-assured
 │
 ├─ web/                     # Next.js web application
 │
-├─ rest-assured-native/     # React Native mobile app
+├─ mobile/     # React Native mobile app
 │
 ├─ infra/
 │   ├─ kubernetes/          # Kubernetes manifests

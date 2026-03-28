@@ -41,19 +41,24 @@ type SetupPoint = {
 
 const SETUP_POINTS: SetupPoint[] = [
   {
-    icon: "albums-outline",
-    title: "Create a program",
-    body: "Build your training structure first.",
+    icon: "barbell-outline",
+    title: "Start in Train",
+    body: "Create your program and splits first.",
   },
   {
-    icon: "git-branch-outline",
-    title: "Add a split",
-    body: "Organize push, pull, legs, or your own style.",
+    icon: "home-outline",
+    title: "Go to Home",
+    body: "Tap add exercise after the setup is ready.",
   },
   {
     icon: "create-outline",
-    title: "Log your first set",
-    body: "See how live logging and insights work.",
+    title: "Log your first workout",
+    body: "Add the exercise, log it, then continue through the tutorial flow.",
+  },
+  {
+    icon: "analytics-outline",
+    title: "Finish on Advanced Insights",
+    body: "After insights, you return here to keep or delete the tutorial program.",
   },
 ];
 
@@ -89,14 +94,14 @@ export default function WelcomeScreen() {
     mode === "tour_cleanup" && !!tutorialProgramId;
 
   const heroFade = useRef(new Animated.Value(0)).current;
-  const heroLift = useRef(new Animated.Value(16)).current;
-  const pulse = useRef(new Animated.Value(0.96)).current;
+  const heroLift = useRef(new Animated.Value(18)).current;
+  const pulse = useRef(new Animated.Value(0.97)).current;
 
   useEffect(() => {
     const entrance = Animated.parallel([
       Animated.timing(heroFade, {
         toValue: 1,
-        duration: 380,
+        duration: 360,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
@@ -117,7 +122,7 @@ export default function WelcomeScreen() {
           useNativeDriver: true,
         }),
         Animated.timing(pulse, {
-          toValue: 0.96,
+          toValue: 0.97,
           duration: 1800,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
@@ -140,9 +145,11 @@ export default function WelcomeScreen() {
     try {
       setLoading(true);
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
       await markWelcomeSeen();
       await startOnboarding();
-      router.replace("/(tabs)/profile");
+
+      router.replace("/(tabs)/train");
     } catch {
       Alert.alert("Error", "Could not start guided setup.");
     } finally {
@@ -156,9 +163,11 @@ export default function WelcomeScreen() {
     try {
       setLoading(true);
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
       await markWelcomeSeen();
       await stopOnboarding();
       await setOnboardingStep("idle");
+
       router.replace("/(tabs)");
     } catch {
       Alert.alert("Error", "Could not finish setup.");
@@ -232,6 +241,7 @@ export default function WelcomeScreen() {
               await markWelcomeSeen();
               await stopOnboarding();
               await setOnboardingStep("idle");
+
               router.replace("/(tabs)");
             } catch {
               Alert.alert("Delete failed", "Could not delete the program.");
@@ -247,11 +257,12 @@ export default function WelcomeScreen() {
   const content = useMemo<WelcomeContent>(() => {
     if (mode === "tour_cleanup") {
       return {
-        badge: "Tour complete",
-        title: "Tour ended",
-        subtitle: "Delete the tutorial program for a clean start or keep it.",
+        badge: "Tutorial complete",
+        title: "Final step",
+        subtitle:
+          "Keep the tutorial program if you want it, or delete it for a clean start.",
         description:
-          "You have finished the guided walkthrough. Keep the sample program to explore more, or delete it for a fresh setup.",
+          "You finished the onboarding flow: Train → Home → Add Exercise → Log → Advanced Insights. Choose whether to keep the sample program, then continue normally.",
         icon: "checkmark-done-circle-outline",
       };
     }
@@ -260,20 +271,20 @@ export default function WelcomeScreen() {
       return {
         badge: "All set",
         title: "You’re good to go",
-        subtitle: "Start using the app normally.",
+        subtitle: "Everything is ready.",
         description:
-          "Your basics are ready. Head home and keep training with your own flow.",
+          "Your onboarding is complete. Head to Home and continue using the app normally.",
         icon: "sparkles-outline",
       };
     }
 
     return {
-      badge: "Welcome to Rest Assured",
-      title: "Train with a cleaner flow.",
+      badge: "Guided setup",
+      title: "Let’s set up your first flow.",
       subtitle:
-        "Track workouts, review progress, and stay consistent without setup friction.",
+        "You’ll start in Train, build the structure, then move through the actual logging flow.",
       description:
-        "The guided setup takes you through creating a program, adding a split, and logging your first exercise so the app makes sense immediately.",
+        "The onboarding starts on the Train tab. First create a program and splits. Then you go to Home, add an exercise, log it, review Advanced Insights, and finally return here to keep or delete the tutorial program.",
       icon: "barbell-outline",
     };
   }, [mode]);
@@ -339,11 +350,13 @@ export default function WelcomeScreen() {
             </View>
 
             <Text style={[styles.title, { color: t.text }]}>{content.title}</Text>
+
             {!!content.subtitle ? (
               <Text style={[styles.subtitle, { color: t.text }]}>
                 {content.subtitle}
               </Text>
             ) : null}
+
             <Text style={[styles.description, { color: t.mutedText }]}>
               {content.description}
             </Text>
@@ -366,6 +379,7 @@ export default function WelcomeScreen() {
                     >
                       <Ionicons name={point.icon} size={16} color={t.text} />
                     </View>
+
                     <View style={styles.featureTextWrap}>
                       <Text style={[styles.featureTitle, { color: t.text }]}>
                         {point.title}
@@ -393,7 +407,7 @@ export default function WelcomeScreen() {
             >
               <Ionicons name="time-outline" size={16} color={t.mutedText} />
               <Text style={[styles.infoStripText, { color: t.mutedText }]}>
-                Takes about a minute and teaches the main flow.
+                Starts in Train and walks through the full beginner flow.
               </Text>
             </View>
 
@@ -459,7 +473,7 @@ export default function WelcomeScreen() {
               activeOpacity={0.88}
             >
               <Text style={[styles.secondaryText, { color: t.text }]}>
-                Keep it
+                Keep program
               </Text>
             </TouchableOpacity>
           </>
@@ -648,4 +662,3 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 });
-

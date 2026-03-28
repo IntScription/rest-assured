@@ -126,7 +126,7 @@ export default function RootLayout() {
           | undefined;
 
         if (data?.type === "program_share") {
-          router.push("/(tabs)/profile");
+          router.push("/(tabs)/train");
           return;
         }
 
@@ -408,4 +408,3 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
-

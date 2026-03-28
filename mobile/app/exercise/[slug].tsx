@@ -91,6 +91,7 @@ type ExercisePrefs = {
   restDuration: number;
   trendMetric: TrendMetric;
   trendView: TrendView;
+  weightJump: number;
 };
 
 type SessionSummary = {
@@ -106,10 +107,62 @@ type PrFlags = {
   reps: boolean;
 };
 
+type CurrentPrOwners = {
+  heaviestId: string | null;
+  volumeId: string | null;
+  repsId: string | null;
+};
+
+type CompareInsightTone = "up" | "same" | "down" | "neutral";
+
+type CompareInsight = {
+  tone: CompareInsightTone;
+  title: string;
+  details: string[];
+};
+
+type RecordShortcut = {
+  key: string;
+  label: string;
+  value: string;
+  logId: string | null;
+  accent: string;
+};
+
+type SuggestionAction = {
+  id: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  apply: () => void;
+};
+
+type LogMarkers = {
+  isCurrentHeaviest: boolean;
+  isCurrentVolume: boolean;
+  isCurrentRep: boolean;
+  isPreviousHeaviest: boolean;
+  isPreviousVolume: boolean;
+  isPreviousRep: boolean;
+  isTodayHeaviest: boolean;
+  isTodayVolume: boolean;
+  isSessionBest: boolean;
+  hasAnyPr: boolean;
+};
+
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const DASHBOARD_GAP = 10;
 const DASHBOARD_CELL_WIDTH = (SCREEN_WIDTH - 32 - 28 - DASHBOARD_GAP) / 2;
 const REST_PRESETS = [45, 60, 90, 120, 150, 180, 240, 300];
+const APPROX_LOG_CARD_HEIGHT = 170;
+const APPROX_MONTH_HEADER_HEIGHT = 30;
+
+const PR_COLORS = {
+  heaviest: "#F59E0B",
+  volume: "#8B5CF6",
+  reps: "#2563EB",
+  recent: "#10B981",
+};
+
 
 function formatWeightLabel(weight: number | null | undefined) {
   const value = Number(weight ?? 0);
@@ -309,6 +362,212 @@ function getPrFlags(logs: LogRow[]) {
   return flags;
 }
 
+
+function getCurrentPrOwners(logs: LogRow[]): CurrentPrOwners {
+  let heaviestId: string | null = null;
+  let volumeId: string | null = null;
+  let repsId: string | null = null;
+  let heaviest = -1;
+  let bestVolume = -1;
+  let bestBodyweightReps = -1;
+
+  for (const log of logs) {
+    const weight = Number(log.weight ?? 0);
+    const volume = Number(log.volume ?? 0);
+    const reps = Number(log.reps ?? 0);
+
+    if (weight > heaviest) {
+      heaviest = weight;
+      heaviestId = log.id;
+    }
+    if (volume > bestVolume) {
+      bestVolume = volume;
+      volumeId = log.id;
+    }
+    if (weight <= 0 && reps > bestBodyweightReps) {
+      bestBodyweightReps = reps;
+      repsId = log.id;
+    }
+  }
+
+  return { heaviestId, volumeId, repsId };
+}
+
+function getTodayLogIds(logs: LogRow[]) {
+  return logs.filter((log) => {
+    if (!log.created_at) return false;
+    const d = new Date(log.created_at);
+    return !Number.isNaN(d.getTime()) && isToday(d);
+  });
+}
+
+function getApproxScrollOffsetForIndex(logs: LogRow[], index: number) {
+  if (index <= 0) return 0;
+  let monthHeaders = 0;
+  for (let i = 0; i <= index; i += 1) {
+    const current = getMonthLabel(logs[i]?.created_at);
+    const prev = i > 0 ? getMonthLabel(logs[i - 1]?.created_at) : null;
+    if (i === 0 || current !== prev) monthHeaders += 1;
+  }
+  return index * APPROX_LOG_CARD_HEIGHT + monthHeaders * APPROX_MONTH_HEADER_HEIGHT;
+}
+
+function getProgressInsight(
+  weightText: string,
+  repsText: string,
+  setsText: string,
+  logs: LogRow[],
+  currentTag: LogTag
+): CompareInsight {
+  const currentWeight = parseFloat(weightText) || 0;
+  const currentReps = parseInt(repsText, 10) || 0;
+  const currentSets = parseInt(setsText, 10) || 0;
+
+  if (!currentReps || !currentSets) {
+    return {
+      tone: "neutral",
+      title: "Fill reps and sets to compare against your history.",
+      details: [],
+    };
+  }
+
+  const comparableLogs = getComparableLogs(logs, currentTag, currentReps);
+  if (comparableLogs.length === 0) {
+    return {
+      tone: "neutral",
+      title: "This will become your first comparable log.",
+      details: [],
+    };
+  }
+
+  const latestComparable = comparableLogs[0];
+  const bestComparable = [...comparableLogs].sort(
+    (a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0)
+  )[0];
+
+  const currentVolume = Math.max(1, currentWeight) * currentReps * currentSets;
+  const latestVolume = Number(latestComparable.volume ?? 0);
+  const bestVolume = Number(bestComparable.volume ?? 0);
+
+  const weightDelta = currentWeight - Number(latestComparable.weight ?? 0);
+  const repDelta = currentReps - Number(bestComparable.reps ?? 0);
+  const volumeVsLast = currentVolume - latestVolume;
+
+  let tone: CompareInsightTone = "same";
+  let title = "This matches your last comparable set.";
+
+  if (currentWeight <= 0 && currentReps > Number(bestComparable.reps ?? 0)) {
+    tone = "up";
+    title = "This would beat your best comparable bodyweight set.";
+  } else if (currentVolume > bestVolume && bestVolume > 0) {
+    tone = "up";
+    title = `This beats your best comparable set by ${currentVolume - bestVolume} volume.`;
+  } else if (currentVolume > latestVolume) {
+    tone = "up";
+    title = `This is ${currentVolume - latestVolume} volume above your last comparable set.`;
+  } else if (currentVolume < latestVolume) {
+    tone = "down";
+    title = `${latestVolume - currentVolume} volume below your last comparable set.`;
+  }
+
+  const details = [
+    `${weightDelta === 0 ? "±0" : weightDelta > 0 ? "+" + weightDelta : String(weightDelta)} kg vs last working`,
+    `${repDelta === 0 ? "Matches" : repDelta > 0 ? "+" + repDelta : String(repDelta)} reps vs best comparable`,
+    `${volumeVsLast === 0 ? "±0" : volumeVsLast > 0 ? "+" + volumeVsLast : String(volumeVsLast)} volume vs last time`,
+  ];
+
+  return { tone, title, details };
+}
+
+function getTrendCallouts(logs: LogRow[]) {
+  if (logs.length === 0) return ["No working logs yet."];
+  const latest = logs[0];
+  const oldestSlice = [...logs].slice(0, 6).reverse();
+  const first = oldestSlice[0];
+  const last = oldestSlice[oldestSlice.length - 1];
+  const weightDelta = Number(last?.weight ?? 0) - Number(first?.weight ?? 0);
+  const volumeSeries = oldestSlice.map((log) => Number(log.volume ?? 0));
+  let improvingSessions = 1;
+  for (let i = volumeSeries.length - 1; i > 0; i -= 1) {
+    if (volumeSeries[i] >= volumeSeries[i - 1]) improvingSessions += 1;
+    else break;
+  }
+  const repDelta = Number(last?.reps ?? 0) - Number(first?.reps ?? 0);
+  const daysSinceLast = latest?.created_at
+    ? Math.floor((Date.now() - new Date(latest.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  return [
+    weightDelta > 0
+      ? `Weight up ${weightDelta} kg over last ${oldestSlice.length} working logs`
+      : weightDelta < 0
+        ? `Weight down ${Math.abs(weightDelta)} kg over last ${oldestSlice.length} working logs`
+        : "Weight is flat across recent working logs",
+    improvingSessions >= 3
+      ? `Volume improved ${improvingSessions} logs in a row`
+      : repDelta > 0
+        ? `Rep performance is trending up`
+        : repDelta < 0
+          ? `Rep performance dipped recently`
+          : "Rep performance is flat",
+    daysSinceLast !== null && daysSinceLast >= 1
+      ? `No working logs in ${daysSinceLast} day${daysSinceLast === 1 ? "" : "s"}`
+      : "You logged this exercise recently",
+  ];
+}
+
+
+function getHeaderTitle(name: string | null | undefined) {
+  if (!name) return "Exercise";
+  return name.length > 24 ? `${name.slice(0, 24).trim()}…` : name;
+}
+
+function getPrBoardItems(logs: LogRow[], currentPrOwners: CurrentPrOwners, dashboardMetrics: { bestVolumeLog: LogRow | null; bodyweightRepPR: number }, lastLog: LogRow | null): RecordShortcut[] {
+  const bestVolumeLabel = dashboardMetrics.bestVolumeLog
+    ? `${formatCompactWeight(dashboardMetrics.bestVolumeLog.weight)} × ${dashboardMetrics.bestVolumeLog.reps} × ${dashboardMetrics.bestVolumeLog.sets}`
+    : "—";
+  const lastLoggedLabel = lastLog
+    ? `${formatCompactWeight(lastLog.weight)} × ${lastLog.reps} × ${lastLog.sets}`
+    : "—";
+
+  return [
+    {
+      key: "heaviest",
+      label: "Heaviest PR",
+      value:
+        currentPrOwners.heaviestId && logs.find((log) => log.id === currentPrOwners.heaviestId)
+          ? (() => {
+            const found = logs.find((log) => log.id === currentPrOwners.heaviestId)!;
+            return `${formatCompactWeight(found.weight)} × ${found.reps}`;
+          })()
+          : "—",
+      logId: currentPrOwners.heaviestId,
+      accent: PR_COLORS.heaviest,
+    },
+    {
+      key: "volume",
+      label: "Volume PR",
+      value: bestVolumeLabel,
+      logId: dashboardMetrics.bestVolumeLog?.id ?? null,
+      accent: PR_COLORS.volume,
+    },
+    {
+      key: "bw",
+      label: "BW Rep PR",
+      value: dashboardMetrics.bodyweightRepPR > 0 ? `${dashboardMetrics.bodyweightRepPR} reps` : "—",
+      logId: currentPrOwners.repsId,
+      accent: PR_COLORS.reps,
+    },
+    {
+      key: "last",
+      label: "Last Logged",
+      value: lastLoggedLabel,
+      logId: lastLog?.id ?? null,
+      accent: PR_COLORS.recent,
+    },
+  ];
+}
+
 export default function ExerciseScreen() {
   const router = useRouter();
   const t = useAppTheme();
@@ -354,6 +613,8 @@ export default function ExerciseScreen() {
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [latestTut, setLatestTut] = useState<TutPreviewRow | null>(null);
   const [tutPreviewLoading, setTutPreviewLoading] = useState(false);
+  const [weightJump, setWeightJump] = useState(2.5);
+  const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
 
   const listRef = useRef<FlatList<LogRow> | null>(null);
   const loggerAnchorY = useRef(0);
@@ -561,6 +822,7 @@ export default function ExerciseScreen() {
       setRestDuration(prefs.restDuration ?? 120);
       setTrendMetric(prefs.trendMetric ?? "volume");
       setTrendView(prefs.trendView ?? "graph");
+      setWeightJump(prefs.weightJump ?? 2.5);
     };
 
     void loadPrefs();
@@ -577,8 +839,9 @@ export default function ExerciseScreen() {
       restDuration,
       trendMetric,
       trendView,
+      weightJump,
     });
-  }, [prefsKey, logTag, restDuration, trendMetric, trendView]);
+  }, [prefsKey, logTag, restDuration, trendMetric, trendView, weightJump]);
 
   useEffect(() => {
     if (!exercise?.id || !user?.id || !isOnline) return;
@@ -771,31 +1034,10 @@ export default function ExerciseScreen() {
     return max || 1;
   }, [recentTrendLogs, trendMetric]);
 
-  const currentComparableMessage = useMemo(() => {
-    const currentWeight = parseFloat(newLog.weight) || 0;
-    const currentReps = parseInt(newLog.reps, 10) || 0;
-    const currentSets = parseInt(newLog.sets, 10) || 0;
-
-    if (!currentReps || !currentSets) return "Fill reps and sets to compare against your history.";
-
-    const comparableLogs = getComparableLogs(workingLogs, logTag, currentReps);
-    if (comparableLogs.length === 0) return "This will become your first comparable log.";
-
-    const latestComparable = comparableLogs[0];
-    const bestComparable = [...comparableLogs].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0))[0];
-
-    const currentVolume = Math.max(1, currentWeight) * currentReps * currentSets;
-    const latestVolume = Number(latestComparable.volume ?? 0);
-    const bestVolume = Number(bestComparable.volume ?? 0);
-
-    if (currentWeight <= 0 && currentReps > Number(bestComparable.reps ?? 0)) {
-      return "This would beat your best comparable bodyweight rep set.";
-    }
-    if (currentVolume > bestVolume && bestVolume > 0) return `This beats best comparable set by ${currentVolume - bestVolume} volume.`;
-    if (currentVolume > latestVolume) return `This is ${currentVolume - latestVolume} volume above last comparable set.`;
-    if (currentVolume === latestVolume) return "This matches your last comparable set.";
-    return `${latestVolume - currentVolume} volume below last comparable set.`;
-  }, [newLog.weight, newLog.reps, newLog.sets, workingLogs, logTag]);
+  const currentComparableInsight = useMemo(
+    () => getProgressInsight(newLog.weight, newLog.reps, newLog.sets, workingLogs, logTag),
+    [newLog.weight, newLog.reps, newLog.sets, workingLogs, logTag]
+  );
 
   const currentVolume = calculateVolume(newLog.weight, newLog.reps, newLog.sets);
 
@@ -809,11 +1051,129 @@ export default function ExerciseScreen() {
   );
 
   const logPrFlags = useMemo(() => getPrFlags(logs), [logs]);
+  const currentPrOwners = useMemo(() => getCurrentPrOwners(logs), [logs]);
+
+  const todayLogs = useMemo(() => getTodayLogIds(logs), [logs]);
+  const todayHeaviestId = useMemo(() => {
+    if (todayLogs.length === 0) return null;
+    return [...todayLogs].sort((a, b) => Number(b.weight ?? 0) - Number(a.weight ?? 0))[0]?.id ?? null;
+  }, [todayLogs]);
+  const todayVolumeId = useMemo(() => {
+    if (todayLogs.length === 0) return null;
+    return [...todayLogs].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0))[0]?.id ?? null;
+  }, [todayLogs]);
+  const sessionBestId = useMemo(() => {
+    const sessionLogs = logs.filter((log) => sessionLogIds.includes(log.id));
+    if (sessionLogs.length === 0) return null;
+    return [...sessionLogs].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0))[0]?.id ?? null;
+  }, [logs, sessionLogIds]);
+
 
   const filteredLogs = useMemo(() => {
     const byType = logFilter === "all" ? logs : logs.filter((log) => getLogTag(log) === logFilter);
-    return byType.filter((log) => matchesSearch(log, logSearch));
-  }, [logs, logFilter, logSearch]);
+    const searched = byType.filter((log) => matchesSearch(log, logSearch));
+
+    if (logSearch.trim()) return searched;
+
+    return searched.filter((log, index) => {
+      const month = getMonthLabel(log.created_at);
+      return !collapsedMonths[month] || index === 0;
+    });
+  }, [logs, logFilter, logSearch, collapsedMonths]);
+
+
+  const trendCallouts = useMemo(() => getTrendCallouts(workingLogs), [workingLogs]);
+
+
+  const scrollToLogCard = useCallback(
+    (logId: string | null) => {
+      if (!logId) return;
+      const index = filteredLogs.findIndex((log) => log.id === logId);
+      if (index < 0) return;
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToOffset({
+          offset: Math.max(0, getApproxScrollOffsetForIndex(filteredLogs, index) - 12),
+          animated: true,
+        });
+      });
+    },
+    [filteredLogs]
+  );
+
+  const prBoardItems = useMemo<RecordShortcut[]>(
+    () => getPrBoardItems(logs, currentPrOwners, dashboardMetrics, lastLog),
+    [logs, currentPrOwners, dashboardMetrics, lastLog]
+  );
+
+  const goalSnapshot = useMemo(
+    () => ({
+      last: lastWorkingLog ? formatComparableLine(lastWorkingLog) : "—",
+      best: bestWorkingLog ? formatComparableLine(bestWorkingLog) : "—",
+      goal:
+        newLog.reps && newLog.sets
+          ? `${formatCompactWeight(parseFloat(newLog.weight) || 0)} · ${newLog.reps}×${newLog.sets}`
+          : "Fill logger",
+    }),
+    [lastWorkingLog, bestWorkingLog, newLog.weight, newLog.reps, newLog.sets]
+  );
+
+  const suggestionActions = useMemo<SuggestionAction[]>(() => {
+    if (!lastWorkingLog) return [];
+
+    const baseWeight = parseFloat(newLog.weight || "") || Number(lastWorkingLog.weight ?? 0);
+    const baseReps = parseInt(newLog.reps || "", 10) || Number(lastWorkingLog.reps ?? 0);
+    const baseSets = parseInt(newLog.sets || "", 10) || Number(lastWorkingLog.sets ?? 0);
+
+    return [
+      {
+        id: "repeat",
+        label: "Repeat",
+        icon: "refresh-outline",
+        apply: () => {
+          setNewLog((prev) => ({
+            ...prev,
+            weight: baseWeight > 0 ? String(baseWeight) : "",
+            reps: String(baseReps),
+            sets: String(baseSets),
+          }));
+          setStatusMsg("Repeated last working suggestion.");
+        },
+      },
+      {
+        id: "weight",
+        label: `+${weightJump} kg`,
+        icon: "trending-up-outline",
+        apply: () => {
+          setNewLog((prev) => ({ ...prev, weight: addWeight(prev.weight || String(baseWeight), weightJump) }));
+          setStatusMsg(`Suggested next set: +${weightJump} kg.`);
+        },
+      },
+      {
+        id: "rep",
+        label: "+1 rep",
+        icon: "add-outline",
+        apply: () => {
+          setNewLog((prev) => ({ ...prev, reps: addInteger(prev.reps || String(baseReps), 1) }));
+          setStatusMsg("Suggested next set: +1 rep.");
+        },
+      },
+      {
+        id: "backoff",
+        label: "Back-off",
+        icon: "arrow-down-outline",
+        apply: () => {
+          const nextWeight = Math.max(0, baseWeight - weightJump);
+          setNewLog((prev) => ({
+            ...prev,
+            weight: nextWeight > 0 ? (Number.isInteger(nextWeight) ? String(nextWeight) : nextWeight.toFixed(1)) : "",
+            reps: String(baseReps + 2),
+            sets: String(baseSets),
+          }));
+          setStatusMsg("Back-off set suggestion applied.");
+        },
+      },
+    ];
+  }, [lastWorkingLog, newLog.weight, newLog.reps, newLog.sets, weightJump]);
 
   const resetForm = useCallback(() => {
     setNewLog({ weight: "", reps: "", sets: "", note: "" });
@@ -1153,10 +1513,12 @@ export default function ExerciseScreen() {
       router.back();
       return;
     }
-    router.replace("/(tabs)");
+
+    router.replace("/");
   };
 
   const keyExtractor = useCallback((item: LogRow) => item.id, []);
+
 
   const renderItem = useCallback(
     ({ item, index }: { item: LogRow; index: number }) => {
@@ -1166,19 +1528,90 @@ export default function ExerciseScreen() {
       const noteExpanded = !!expandedNotes[item.id];
       const prFlags = logPrFlags[item.id] ?? { heaviest: false, volume: false, reps: false };
 
+      const markers: LogMarkers = {
+        isCurrentHeaviest: currentPrOwners.heaviestId === item.id,
+        isCurrentVolume: currentPrOwners.volumeId === item.id,
+        isCurrentRep: currentPrOwners.repsId === item.id,
+        isPreviousHeaviest: prFlags.heaviest && currentPrOwners.heaviestId !== item.id,
+        isPreviousVolume: prFlags.volume && currentPrOwners.volumeId !== item.id,
+        isPreviousRep: prFlags.reps && currentPrOwners.repsId !== item.id,
+        isTodayHeaviest: todayHeaviestId === item.id,
+        isTodayVolume: todayVolumeId === item.id,
+        isSessionBest: sessionBestId === item.id,
+        hasAnyPr:
+          prFlags.heaviest ||
+          prFlags.volume ||
+          prFlags.reps ||
+          currentPrOwners.heaviestId === item.id ||
+          currentPrOwners.volumeId === item.id ||
+          currentPrOwners.repsId === item.id,
+      };
+
+      const monthIsCollapsed = !!collapsedMonths[currentMonth];
+      const isFirstInMonth = showMonthHeader;
+      if (monthIsCollapsed && !isFirstInMonth) {
+        return null;
+      }
+
+      const leftAccentColor = markers.isCurrentHeaviest
+        ? PR_COLORS.heaviest
+        : markers.isCurrentVolume
+          ? PR_COLORS.volume
+          : markers.isCurrentRep
+            ? PR_COLORS.reps
+            : markers.isTodayHeaviest || markers.isTodayVolume || markers.isSessionBest
+              ? PR_COLORS.recent
+              : "transparent";
+
       return (
         <>
           {showMonthHeader ? (
-            <View style={styles.monthHeaderWrap}>
-              <Text style={[styles.monthHeaderText, { color: t.mutedText }]}>{currentMonth}</Text>
-            </View>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() =>
+                setCollapsedMonths((prev) => ({ ...prev, [currentMonth]: !prev[currentMonth] }))
+              }
+              style={styles.monthHeaderWrap}
+            >
+              <Text style={[styles.monthHeaderText, { color: t.mutedText }]}>
+                {currentMonth} {collapsedMonths[currentMonth] ? "· Tap to expand" : "· Tap to collapse"}
+              </Text>
+            </TouchableOpacity>
           ) : null}
 
-          <View style={[styles.logCard, { backgroundColor: t.card, borderColor: t.border }]}>
-            <View style={styles.logLeft}>
-              <Text style={[styles.logText, { color: t.text }]}>{formatLogLine(item)}</Text>
-              <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(item.created_at)}</Text>
+          <TouchableOpacity
+            activeOpacity={0.92}
+            onLongPress={() => duplicateLog(item)}
+            style={[
+              styles.logCard,
+              {
+                backgroundColor: t.card,
+                borderColor: markers.hasAnyPr ? leftAccentColor : t.border,
+                shadowColor: leftAccentColor,
+              },
+              markers.hasAnyPr && styles.logCardPr,
+            ]}
+          >
+            <View
+              style={[
+                styles.logPrRail,
+                { backgroundColor: markers.hasAnyPr ? leftAccentColor : "transparent" },
+              ]}
+            />
 
+            <View style={styles.logLeft}>
+              <View style={styles.logTitleRow}>
+                {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
+                  <Ionicons
+                    name={markers.hasAnyPr ? "trophy-outline" : "flash-outline"}
+                    size={16}
+                    color={markers.hasAnyPr ? leftAccentColor : t.text}
+                  />
+                ) : null}
+                <Text style={[styles.logText, { color: t.text }]}>{formatLogLine(item)}</Text>
+              </View>
+
+              <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(item.created_at)}</Text>
               <View style={styles.logMetaRow}>
                 <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
                   <Text style={[styles.logMetaChipText, { color: t.text }]}>
@@ -1192,23 +1625,20 @@ export default function ExerciseScreen() {
                   </Text>
                 </View>
 
-                {prFlags.heaviest ? (
-                  <View style={[styles.prChip, { backgroundColor: "#F59E0B", borderColor: "#F59E0B" }]}>
-                    <Text style={styles.prChipText}>Heaviest PR</Text>
-                  </View>
-                ) : null}
-
-                {prFlags.volume ? (
-                  <View style={[styles.prChip, { backgroundColor: "#8B5CF6", borderColor: "#8B5CF6" }]}>
-                    <Text style={styles.prChipText}>Volume PR</Text>
-                  </View>
-                ) : null}
-
-                {prFlags.reps ? (
-                  <View style={[styles.prChip, { backgroundColor: "#2563EB", borderColor: "#2563EB" }]}>
-                    <Text style={styles.prChipText}>Rep PR</Text>
-                  </View>
-                ) : null}
+                <View style={styles.logIndicatorRow}>
+                  {markers.isCurrentHeaviest || markers.isPreviousHeaviest ? (
+                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.heaviest }]} />
+                  ) : null}
+                  {markers.isCurrentVolume || markers.isPreviousVolume ? (
+                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.volume }]} />
+                  ) : null}
+                  {markers.isCurrentRep || markers.isPreviousRep ? (
+                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.reps }]} />
+                  ) : null}
+                  {markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume ? (
+                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.recent }]} />
+                  ) : null}
+                </View>
 
                 {item.pending ? (
                   <View style={[styles.pendingChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
@@ -1216,6 +1646,26 @@ export default function ExerciseScreen() {
                   </View>
                 ) : null}
               </View>
+
+              {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
+                <Text style={[styles.logIndicatorHint, { color: t.mutedText }]}>
+                  {markers.isCurrentHeaviest
+                    ? "Current heaviest PR"
+                    : markers.isCurrentVolume
+                      ? "Current volume PR"
+                      : markers.isCurrentRep
+                        ? "Current bodyweight rep PR"
+                        : markers.isSessionBest
+                          ? "Session best"
+                          : markers.isTodayHeaviest
+                            ? "Today’s heaviest"
+                            : markers.isTodayVolume
+                              ? "Today’s highest volume"
+                              : markers.isPreviousHeaviest || markers.isPreviousVolume || markers.isPreviousRep
+                                ? "Previous PR milestone"
+                                : ""}
+                </Text>
+              ) : null}
 
               {item.day ? (
                 <>
@@ -1265,12 +1715,28 @@ export default function ExerciseScreen() {
                 <Text style={[styles.sideActionText, { color: "#fff" }]}>Delete</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </>
       );
     },
-    [duplicateLog, expandedNotes, filteredLogs, handleDelete, handleEdit, logPrFlags, t]
+    [
+      collapsedMonths,
+      currentPrOwners.heaviestId,
+      currentPrOwners.repsId,
+      currentPrOwners.volumeId,
+      duplicateLog,
+      expandedNotes,
+      filteredLogs,
+      handleDelete,
+      handleEdit,
+      logPrFlags,
+      sessionBestId,
+      t,
+      todayHeaviestId,
+      todayVolumeId,
+    ]
   );
+
 
   if (loading) {
     return (
@@ -1285,7 +1751,17 @@ export default function ExerciseScreen() {
     return (
       <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
         <Text style={{ color: t.text, fontSize: 16, fontWeight: "600" }}>Exercise not found</Text>
-        <TouchableOpacity onPress={() => router.replace("/(tabs)")} style={{ marginTop: 12 }}>
+        <TouchableOpacity
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+              return;
+            }
+
+            router.replace("/");
+          }}
+          style={{ marginTop: 12 }}
+        >
           <Text style={{ color: t.link, fontWeight: "700" }}>← Back Home</Text>
         </TouchableOpacity>
       </SafeAreaView>
@@ -1311,8 +1787,20 @@ export default function ExerciseScreen() {
             ]}
           >
             <Ionicons name="chevron-back" size={18} color={t.text} />
-            <Text style={[styles.backText, { color: t.text }]}>Back</Text>
           </Pressable>
+
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerTitle, { color: t.text }]} numberOfLines={1}>
+              {getHeaderTitle(exercise.name)}
+            </Text>
+            {splitName ? (
+              <Text style={[styles.headerSubtitle, { color: t.mutedText }]} numberOfLines={1}>
+                {splitName}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.headerSpacer} />
         </View>
 
         <FlatList
@@ -1320,19 +1808,13 @@ export default function ExerciseScreen() {
           data={filteredLogs}
           keyExtractor={keyExtractor}
           keyboardShouldPersistTaps="handled"
+          getItemLayout={(_, index) => ({
+            length: APPROX_LOG_CARD_HEIGHT,
+            offset: APPROX_LOG_CARD_HEIGHT * index,
+            index,
+          })}
           ListHeaderComponent={
             <>
-              <Text style={[styles.title, { color: t.text }]}>{exercise.name}</Text>
-
-              {splitName ? (
-                <View style={[styles.contextChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
-                  <Ionicons name="albums-outline" size={14} color={t.mutedText} />
-                  <Text style={[styles.contextChipText, { color: t.mutedText }]}>
-                    In <Text style={[styles.contextChipStrong, { color: t.text }]}>{splitName}</Text>
-                  </Text>
-                </View>
-              ) : null}
-
               {!isOnline ? (
                 <View style={[styles.offlineChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
                   <Ionicons name="cloud-offline-outline" size={14} color={t.mutedText} />
@@ -1407,6 +1889,34 @@ export default function ExerciseScreen() {
                   </Text>
                 </View>
               ) : null}
+              <View style={[styles.prBoardCard, { backgroundColor: t.card, borderColor: t.border }]}>
+                <View style={styles.prBoardHeader}>
+                  <View>
+                    <Text style={[styles.prBoardEyebrow, { color: t.mutedText }]}>PR Board</Text>
+                    <Text style={[styles.prBoardTitle, { color: t.text }]}>Current records</Text>
+                  </View>
+                  <Ionicons name="trophy-outline" size={18} color={t.text} />
+                </View>
+
+                <View style={styles.prBoardGrid}>
+                  {prBoardItems.map((record) => (
+                    <TouchableOpacity
+                      key={record.key}
+                      onPress={() => scrollToLogCard(record.logId)}
+                      activeOpacity={0.88}
+                      style={[styles.prBoardItem, { backgroundColor: t.cardAlt, borderColor: t.border }]}
+                    >
+                      <View style={styles.prBoardItemTop}>
+                        <View style={[styles.prBoardDot, { backgroundColor: record.accent }]} />
+                        <Text style={[styles.prBoardLabel, { color: t.mutedText }]}>{record.label}</Text>
+                      </View>
+                      <Text style={[styles.prBoardValue, { color: t.text }]} numberOfLines={2}>
+                        {record.value}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
 
               <View style={[styles.dashboardCard, { backgroundColor: t.card, borderColor: t.border }]}>
                 <Pressable
@@ -1502,6 +2012,51 @@ export default function ExerciseScreen() {
                       </View>
                     </View>
 
+
+
+                    <View style={[styles.goalDashboardCard, { borderColor: t.border, backgroundColor: t.cardAlt }]}>
+                      <View style={styles.goalDashboardHeader}>
+                        <Text style={[styles.goalDashboardTitle, { color: t.text }]}>Last / Best / Goal</Text>
+                        <Ionicons name="sparkles-outline" size={16} color={t.mutedText} />
+                      </View>
+
+                      <View style={styles.goalDashboardGrid}>
+                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
+                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Last</Text>
+                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.last}</Text>
+                        </View>
+                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
+                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Best</Text>
+                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.best}</Text>
+                        </View>
+                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
+                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Goal</Text>
+                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.goal}</Text>
+                        </View>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.compareInsightCard,
+                          currentComparableInsight.tone === "up"
+                            ? styles.compareInsightUp
+                            : currentComparableInsight.tone === "same"
+                              ? styles.compareInsightSame
+                              : currentComparableInsight.tone === "down"
+                                ? styles.compareInsightDown
+                                : styles.compareInsightNeutral,
+                        ]}
+                      >
+                        <Text style={[styles.compareHintStrong, { color: t.text }]}>
+                          {currentComparableInsight.title}
+                        </Text>
+                        {currentComparableInsight.details.map((detail) => (
+                          <Text key={detail} style={[styles.compareHint, { color: t.mutedText }]}>
+                            • {detail}
+                          </Text>
+                        ))}
+                      </View>
+                    </View>
                     <View style={styles.trendControlRow}>
                       <View style={styles.trendToggleWrap}>
                         {(["volume", "weight", "reps"] as TrendMetric[]).map((metric) => {
@@ -1644,6 +2199,16 @@ export default function ExerciseScreen() {
                 ) : null}
               </View>
 
+
+              <View style={[styles.calloutCard, { backgroundColor: t.card, borderColor: t.border }]}>
+                <Text style={[styles.calloutTitle, { color: t.text }]}>Trend callouts</Text>
+                {trendCallouts.map((callout) => (
+                  <Text key={callout} style={[styles.calloutText, { color: t.mutedText }]}>
+                    • {callout}
+                  </Text>
+                ))}
+              </View>
+
               <Pressable
                 onLayout={(event) => {
                   advancedInsightsAnchorY.current = event.nativeEvent.layout.y;
@@ -1693,37 +2258,6 @@ export default function ExerciseScreen() {
 
                 <Ionicons name="chevron-forward" size={18} color={t.mutedText} />
               </Pressable>
-
-              <View style={[styles.compareCard, { backgroundColor: t.card, borderColor: t.border }]}>
-                <Text style={[styles.compareTitle, { color: t.text }]}>Last / Best / Goal</Text>
-
-                <View style={styles.compareGrid}>
-                  <View style={[styles.compareCell, { borderColor: t.border }]}>
-                    <Text style={[styles.compareLabel, { color: t.mutedText }]}>Last</Text>
-                    <Text style={[styles.compareValue, { color: t.text }]} numberOfLines={2}>
-                      {lastWorkingLog ? formatLogLine(lastWorkingLog) : "—"}
-                    </Text>
-                  </View>
-
-                  <View style={[styles.compareCell, { borderColor: t.border }]}>
-                    <Text style={[styles.compareLabel, { color: t.mutedText }]}>Best</Text>
-                    <Text style={[styles.compareValue, { color: t.text }]} numberOfLines={2}>
-                      {bestWorkingLog ? formatLogLine(bestWorkingLog) : "—"}
-                    </Text>
-                  </View>
-
-                  <View style={[styles.compareCell, { borderColor: t.border }]}>
-                    <Text style={[styles.compareLabel, { color: t.mutedText }]}>Goal</Text>
-                    <Text style={[styles.compareValue, { color: t.text }]} numberOfLines={2}>
-                      {newLog.reps && newLog.sets
-                        ? `${formatCompactWeight(parseFloat(newLog.weight) || 0)} × ${newLog.reps} × ${newLog.sets}`
-                        : "Fill logger below"}
-                    </Text>
-                  </View>
-                </View>
-
-                <Text style={[styles.compareHint, { color: t.mutedText }]}>{currentComparableMessage}</Text>
-              </View>
 
               <View
                 onLayout={(event) => {
@@ -1829,12 +2363,12 @@ export default function ExerciseScreen() {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    onPress={() => applyPlusWeight(2.5)}
+                    onPress={() => applyPlusWeight(weightJump)}
                     activeOpacity={0.85}
                     style={[styles.progressButton, { backgroundColor: t.cardAlt, borderColor: t.border }]}
                   >
                     <Ionicons name="add-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>+2.5 kg</Text>
+                    <Text style={[styles.progressButtonText, { color: t.text }]}>{`+${weightJump} kg`}</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -1855,6 +2389,57 @@ export default function ExerciseScreen() {
                     <Text style={[styles.progressButtonText, { color: t.text }]}>+1 set</Text>
                   </TouchableOpacity>
                 </View>
+
+
+                <View style={styles.quickConfigRow}>
+                  <Text style={[styles.quickConfigLabel, { color: t.mutedText }]}>Weight jump</Text>
+                  <View style={styles.weightJumpWrap}>
+                    {[1.25, 2.5, 5].map((step) => {
+                      const active = weightJump === step;
+                      return (
+                        <TouchableOpacity
+                          key={step}
+                          onPress={() => {
+                            setWeightJump(step);
+                            setStatusMsg(`Default jump set to ${step} kg.`);
+                          }}
+                          activeOpacity={0.85}
+                          style={[
+                            styles.weightJumpChip,
+                            { backgroundColor: t.cardAlt, borderColor: t.border },
+                            active && { backgroundColor: t.primaryBg, borderColor: t.primaryBg },
+                          ]}
+                        >
+                          <Text style={[styles.weightJumpChipText, { color: active ? t.primaryText : t.text }]}>
+                            {step} kg
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {suggestionActions.length > 0 ? (
+                  <View style={styles.suggestionBlock}>
+                    <Text style={[styles.quickConfigLabel, { color: t.mutedText }]}>Suggest next set</Text>
+                    <View style={styles.suggestionRow}>
+                      {suggestionActions.map((action) => (
+                        <TouchableOpacity
+                          key={action.id}
+                          onPress={() => {
+                            action.apply();
+                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          }}
+                          activeOpacity={0.85}
+                          style={[styles.suggestionChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}
+                        >
+                          <Ionicons name={action.icon} size={14} color={t.text} />
+                          <Text style={[styles.suggestionChipText, { color: t.text }]}>{action.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
 
                 <View style={styles.inputsRow}>
                   <View style={styles.inputBlock}>
@@ -2045,16 +2630,39 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 20 },
   loadingText: { marginTop: 12, fontSize: 14, fontWeight: "500" },
 
-  header: { flexDirection: "row", paddingTop: 8, marginBottom: 8 },
-  backBtn: {
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    borderWidth: 1,
+  header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    justifyContent: "space-between",
+    paddingTop: 6,
+    marginBottom: 10,
+    minHeight: 52,
   },
+  backBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  headerSubtitle: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  headerSpacer: { width: 42, height: 42 },
   backText: { fontWeight: "700", fontSize: 14 },
   pressed: { opacity: 0.82, transform: [{ scale: 0.985 }] },
 
@@ -2129,6 +2737,63 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: "500",
+  },
+
+  prBoardCard: {
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 14,
+  },
+  prBoardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  prBoardEyebrow: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 3,
+  },
+  prBoardTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: -0.25,
+  },
+  prBoardGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: 10,
+  },
+  prBoardItem: {
+    width: DASHBOARD_CELL_WIDTH,
+    minHeight: 94,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 12,
+    justifyContent: "space-between",
+  },
+  prBoardItemTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  prBoardDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  prBoardLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  prBoardValue: {
+    fontSize: 16,
+    fontWeight: "800",
+    lineHeight: 21,
   },
 
   dashboardCard: {
@@ -2220,6 +2885,45 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: -0.2,
+  },
+  goalDashboardCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 12,
+  },
+  goalDashboardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  goalDashboardTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  goalDashboardGrid: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+  },
+  goalDashboardCell: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 10,
+    minHeight: 78,
+    justifyContent: "space-between",
+  },
+  goalDashboardLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  goalDashboardValue: {
+    fontSize: 14,
+    fontWeight: "800",
+    lineHeight: 18,
   },
 
   trendControlRow: {
@@ -2323,6 +3027,24 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
+  calloutCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 14,
+  },
+  calloutTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  calloutText: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+
   advancedCard: {
     borderWidth: 1,
     borderRadius: 22,
@@ -2391,8 +3113,35 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     lineHeight: 22,
   },
-  compareHint: {
+  compareInsightCard: {
     marginTop: 10,
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+  },
+  compareInsightUp: {
+    backgroundColor: "rgba(16, 185, 129, 0.08)",
+    borderColor: "rgba(16, 185, 129, 0.35)",
+  },
+  compareInsightSame: {
+    backgroundColor: "rgba(245, 158, 11, 0.08)",
+    borderColor: "rgba(245, 158, 11, 0.35)",
+  },
+  compareInsightDown: {
+    backgroundColor: "rgba(239, 68, 68, 0.08)",
+    borderColor: "rgba(239, 68, 68, 0.35)",
+  },
+  compareInsightNeutral: {
+    backgroundColor: "rgba(148, 163, 184, 0.08)",
+    borderColor: "rgba(148, 163, 184, 0.28)",
+  },
+  compareHintStrong: {
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 6,
+    lineHeight: 18,
+  },
+  compareHint: {
     fontSize: 12,
     fontWeight: "600",
     lineHeight: 18,
@@ -2461,6 +3210,52 @@ const styles = StyleSheet.create({
   },
   progressButtonDisabled: {
     opacity: 0.45,
+  },
+
+  quickConfigRow: {
+    marginTop: 14,
+    gap: 8,
+  },
+  quickConfigLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  weightJumpWrap: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  weightJumpChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  weightJumpChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  suggestionBlock: {
+    marginTop: 12,
+    gap: 8,
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  suggestionChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  suggestionChipText: {
+    fontSize: 12,
+    fontWeight: "700",
   },
 
   inputsRow: {
@@ -2625,6 +3420,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: "row",
     gap: 12,
+    overflow: "hidden",
+  },
+  logCardPr: {
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  logPrRail: {
+    width: 4,
+    borderRadius: 999,
+    alignSelf: "stretch",
   },
   logLeft: {
     flex: 1,
@@ -2635,7 +3442,12 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     gap: 8,
   },
-  logText: { fontSize: 16, fontWeight: "700" },
+  logTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  logText: { fontSize: 16, fontWeight: "700", flex: 1 },
   logDate: { fontSize: 12, fontWeight: "500" },
   logMetaRow: {
     flexDirection: "row",
@@ -2653,14 +3465,49 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  logIndicatorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginLeft: 2,
+  },
+  logIndicatorDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  logIndicatorHint: {
+    marginTop: 8,
+    fontSize: 11,
+    fontWeight: "700",
+  },
 
-  prChip: {
+  prHeroChip: {
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  prChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    opacity: 0.86,
+  },
   prChipText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  contextFlagChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  contextFlagChipText: {
     color: "#fff",
     fontSize: 11,
     fontWeight: "700",
@@ -2703,3 +3550,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+

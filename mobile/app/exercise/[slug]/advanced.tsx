@@ -708,7 +708,7 @@ export default function AdvancedScreen() {
       router.back();
       return;
     }
-    router.push("/(tabs)");
+    router.replace("/");
   }, [router]);
 
   const finishTourToCleanup = useCallback(async () => {
@@ -952,20 +952,34 @@ export default function AdvancedScreen() {
   const listHeader = useMemo(
     () => (
       <>
-        <View style={styles.headerRow}>
-          <Pressable
-            onPress={handleGoBack}
-            style={[styles.backIcon, { backgroundColor: t.card }]}
-          >
-            <Ionicons name="chevron-back" size={20} color={t.text} />
-          </Pressable>
-        </View>
-
-        <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: t.text }]}>Time under tension</Text>
-          <Text style={[styles.subtitle, { color: t.mutedText }]}>
+        <View
+          style={[
+            styles.heroIntroCard,
+            { backgroundColor: t.card, borderColor: t.border },
+          ]}
+        >
+          <View style={styles.heroIntroHeader}>
+            <Text style={[styles.heroIntroTitle, { color: t.text }]}>Time under tension</Text>
+            <Ionicons name="pulse-outline" size={18} color={t.primaryBg} />
+          </View>
+          <Text style={[styles.heroIntroBody, { color: t.mutedText }]}>
             Log and review your TUT performance, notes, and progress in one place.
           </Text>
+
+          <View style={styles.featurePillRow}>
+            <View style={[styles.featurePill, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+              <Ionicons name="timer-outline" size={14} color={t.text} />
+              <Text style={[styles.featurePillText, { color: t.text }]}>Tempo control</Text>
+            </View>
+            <View style={[styles.featurePill, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+              <Ionicons name="barbell-outline" size={14} color={t.text} />
+              <Text style={[styles.featurePillText, { color: t.text }]}>Load + reps</Text>
+            </View>
+            <View style={[styles.featurePill, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+              <Ionicons name="moon-outline" size={14} color={t.text} />
+              <Text style={[styles.featurePillText, { color: t.text }]}>Rest tracking</Text>
+            </View>
+          </View>
         </View>
 
         {tourActive && tourStep === "advanced-log" ? (
@@ -1270,6 +1284,23 @@ export default function AdvancedScreen() {
       style={[styles.container, { backgroundColor: t.background }]}
       edges={["top"]}
     >
+      <View style={styles.screenHeader}>
+        <Pressable
+          onPress={handleGoBack}
+          style={[styles.backIcon, styles.fixedBackIcon, { backgroundColor: t.card, borderColor: t.border }]}
+        >
+          <Ionicons name="chevron-back" size={20} color={t.text} />
+        </Pressable>
+
+        <View style={styles.screenHeaderCenter}>
+          <Text style={[styles.screenHeaderTitle, { color: t.text }]} numberOfLines={1}>
+            Advanced Insights
+          </Text>
+        </View>
+
+        <View style={styles.screenHeaderSpacer} />
+      </View>
+
       <KeyboardAvoidingView
         style={styles.keyboardWrap}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -1312,7 +1343,76 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 28,
+  },
+  screenHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 8,
+    minHeight: 52,
+  },
+  fixedBackIcon: {
+    borderWidth: 1,
+  },
+  screenHeaderCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  screenHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  screenHeaderSpacer: {
+    width: 40,
+    height: 40,
+  },
+  heroIntroCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 14,
+  },
+  heroIntroHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  heroIntroTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  heroIntroBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "500",
+  },
+  featurePillRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
+  featurePill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  featurePillText: {
+    fontSize: 12,
+    fontWeight: "700",
   },
   headerRow: {
     flexDirection: "row",
@@ -1694,3 +1794,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
+

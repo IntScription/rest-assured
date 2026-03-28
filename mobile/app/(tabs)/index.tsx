@@ -1,7 +1,7 @@
 // app/(tabs)/index.tsx
 "use client";
 
-import React, {
+import {
   memo,
   useEffect,
   useState,
@@ -35,6 +35,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAppTheme } from "@/src/theme/theme";
 import { useIsOnline } from "@/hooks/use-is-online";
+import { useSyncOnReconnect } from "@/src/hooks/use-sync-on-reconnect";
 import { cacheGetJson, cacheKey, cacheSetJson } from "@/src/lib/offline-cache";
 import type { Database } from "@/src/types/supabase";
 import type { User } from "@supabase/supabase-js";
@@ -116,7 +117,6 @@ type SplitPageProps = {
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const EXERCISE_LIST_CONTENT_STYLE = { padding: 16 };
 
-/* ================= HELPERS ================= */
 function formatWeight(weight: number | string | null | undefined) {
   const num = Number(weight ?? 0);
   if (!Number.isFinite(num) || num <= 0) return null;
@@ -135,7 +135,6 @@ function formatLatestLog(log: LatestLogLite | null | undefined) {
   return `Last: ${repsText} · ${setsText}`;
 }
 
-/* ================= HOOKS ================= */
 function useProgram(user: User | null) {
   const [activeProgram, setActiveProgram] = useState<Program | null>(() => getActiveProgramSnapshot());
   const [programLoading, setProgramLoading] = useState(true);
@@ -166,11 +165,10 @@ function useProgram(user: User | null) {
   const applyProgram = useCallback(
     (program: Program | null | undefined, options?: { publish?: boolean }) => {
       const nextProgram = normalizeProgram(program);
+
       setActiveProgram((prev) => {
         const prevNormalized = normalizeProgram(prev);
-        if (sameProgram(prevNormalized, nextProgram)) {
-          return prevNormalized;
-        }
+        if (sameProgram(prevNormalized, nextProgram)) return prevNormalized;
         return nextProgram;
       });
 
@@ -285,8 +283,7 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
     lastProgramIdRef.current = null;
     setCurrentIndex(0);
     setListIndex(0);
-    setSplits([]);
-    setLoading(Boolean(user && activeProgram && isOnline));
+    setLoading(Boolean(user?.id && activeProgram?.id && isOnline));
   }, [activeProgram?.id, user?.id, isOnline]);
 
   const fetchSplits = useCallback(
@@ -337,9 +334,7 @@ function useSplits(user: User | null, activeProgram: Program | null, isOnline: b
 
       if (prevId) {
         const found = nextSplits.findIndex((s) => s.id === prevId);
-        if (found >= 0) {
-          nextCurrentIndex = found;
-        }
+        if (found >= 0) nextCurrentIndex = found;
       }
 
       setSplits(nextSplits);
@@ -432,9 +427,7 @@ function useExercisesAndLatestLogs(
       for (const id of exerciseIds) nextMap[id] = null;
 
       for (const row of (data ?? []) as LatestLogLite[]) {
-        if (!nextMap[row.exercise_id]) {
-          nextMap[row.exercise_id] = row;
-        }
+        if (!nextMap[row.exercise_id]) nextMap[row.exercise_id] = row;
       }
 
       setLatestLogsByExercise((prev) => ({ ...prev, ...nextMap }));
@@ -714,7 +707,6 @@ function useWorkoutCycles(user: User | null, activeProgram: Program | null, spli
   };
 }
 
-/* ================= MEMOIZED ROWS ================= */
 const ExerciseRow = memo(function ExerciseRow({
   item,
   index,
@@ -923,9 +915,7 @@ function ExerciseList({
   if (exercises.length === 0) {
     return (
       <View style={styles.exerciseEmpty}>
-        <Text style={[styles.exerciseEmptyText, { color: t.mutedText }]}>
-          No exercises yet. Tap “Add Exercise”.
-        </Text>
+        <Text style={[styles.exerciseEmptyText, { color: t.mutedText }]}>No exercises yet. Tap “Add Exercise”.</Text>
       </View>
     );
   }
@@ -1015,9 +1005,7 @@ const SplitPage = memo(function SplitPage({
           {item.name}
         </Text>
 
-        {item.focus ? (
-          <Text style={[styles.focus, { color: t.mutedText }]}>{item.focus}</Text>
-        ) : null}
+        {item.focus ? <Text style={[styles.focus, { color: t.mutedText }]}>{item.focus}</Text> : null}
 
         <View style={styles.actions}>
           <TouchableOpacity
@@ -1099,7 +1087,6 @@ const SplitPage = memo(function SplitPage({
   );
 });
 
-/* ================= HOME SCREEN ================= */
 export default function HomeScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -1108,6 +1095,8 @@ export default function HomeScreen() {
   }>();
   const t = useAppTheme();
   const isOnline = useIsOnline();
+
+  useSyncOnReconnect(isOnline);
 
   const tutorialProgramId = useMemo(
     () => (Array.isArray(params.tutorialProgramId) ? params.tutorialProgramId[0] : params.tutorialProgramId),
@@ -1121,7 +1110,6 @@ export default function HomeScreen() {
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [cacheHydrated, setCacheHydrated] = useState(false);
-  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState<string>("idle");
@@ -1140,7 +1128,6 @@ export default function HomeScreen() {
   const didSetInitialOffsetRef = useRef(false);
   const lastSyncedOffsetRef = useRef<number | null>(null);
 
-  /* ================= AUTH ================= */
   useEffect(() => {
     let mounted = true;
 
@@ -1170,7 +1157,6 @@ export default function HomeScreen() {
 
   const uid = user?.id ?? "";
 
-  /* ================= HOOKS ================= */
   const { activeProgram, programLoading, fetchProgram } = useProgram(user);
 
   const {
@@ -1237,8 +1223,6 @@ export default function HomeScreen() {
     parallaxAnim.setValue(0);
     setCurrentIndex(0);
     setListIndex(0);
-    setExercisesBySplit({});
-    setLatestLogsByExercise({});
     setEditingId(null);
     setEditValue("");
   }, [
@@ -1246,8 +1230,6 @@ export default function HomeScreen() {
     parallaxAnim,
     setCurrentIndex,
     setListIndex,
-    setExercisesBySplit,
-    setLatestLogsByExercise,
     setEditingId,
     setEditValue,
   ]);
@@ -1280,18 +1262,6 @@ export default function HomeScreen() {
     }, [])
   );
 
-  /* ================= FIRST-LOAD GATING ================= */
-  useEffect(() => {
-    setInitialDataLoaded(false);
-  }, [uid, activeProgram?.id]);
-
-  useEffect(() => {
-    if (!booting && cacheHydrated && !programLoading && !loading) {
-      setInitialDataLoaded(true);
-    }
-  }, [booting, cacheHydrated, programLoading, loading]);
-
-  /* ================= CACHE ================= */
   const homeCacheKey = useMemo(() => {
     if (!uid || !activeProgram?.id) return null;
     return cacheKey(["home", uid, activeProgram.id]);
@@ -1343,7 +1313,6 @@ export default function HomeScreen() {
     });
   }, [homeCacheKey, splits, exercisesBySplit, latestLogsByExercise]);
 
-  /* ================= REALTIME ================= */
   useEffect(() => {
     if (!uid) return;
 
@@ -1444,7 +1413,6 @@ export default function HomeScreen() {
     };
   }, [uid, activeProgram?.id, currentSplit?.id, refetchTimer]);
 
-  /* ================= CAROUSEL ================= */
   const handleCarouselLayout = useCallback(() => {
     if (splits.length === 0 || didSetInitialOffsetRef.current) return;
 
@@ -1602,10 +1570,13 @@ export default function HomeScreen() {
     ]
   );
 
-  const splitKeyExtractor = useCallback((item: SplitLite, index: number) => `${item.id}:${index}`, []);
+  const loopedSplitKeyExtractor = useCallback(
+    (item: SplitLite, index: number) => `${item.id}:${index}`,
+    []
+  );
 
-  /* ================= UI ================= */
-  const screenBusy = !initialDataLoaded && (booting || programLoading || !cacheHydrated || loading);
+  const hasUsableData = splits.length > 0 || Object.keys(exercisesBySplit).length > 0;
+  const screenBusy = !hasUsableData && !cacheHydrated && (booting || programLoading || loading);
 
   if (screenBusy) {
     return (
@@ -1619,12 +1590,14 @@ export default function HomeScreen() {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: t.background }]} edges={["top"]}>
         <View style={styles.emptyState}>
-          <Text style={[styles.emptyText, { color: t.mutedText }]}>
-            No splits found. Create a program and add splits from the Profile tab.
-          </Text>
+          <Text style={[styles.emptyText, { color: t.mutedText }]}>No splits found. Create a program and add splits from the Train tab.</Text>
 
-          <TouchableOpacity onPress={() => router.push("/profile")} activeOpacity={0.85} style={styles.emptyCta}>
-            <Text style={styles.emptyCtaText}>Go to Profile</Text>
+          <TouchableOpacity
+            onPress={() => router.push("/train")}
+            activeOpacity={0.85}
+            style={styles.emptyCta}
+          >
+            <Text style={styles.emptyCtaText}>Go to Train</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -1672,7 +1645,7 @@ export default function HomeScreen() {
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
-          keyExtractor={splitKeyExtractor}
+          keyExtractor={loopedSplitKeyExtractor}
           getItemLayout={(_, index) => ({
             length: SCREEN_WIDTH,
             offset: SCREEN_WIDTH * index,
@@ -1693,7 +1666,6 @@ export default function HomeScreen() {
   );
 }
 
-/* ================= STYLES ================= */
 const styles = StyleSheet.create({
   container: { flex: 1 },
   flexFill: { flex: 1 },

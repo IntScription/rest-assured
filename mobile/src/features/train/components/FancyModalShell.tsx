@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  Dimensions,
   Easing,
   KeyboardAvoidingView,
   Modal,
@@ -36,159 +37,200 @@ export default function FancyModalShell({
   enableSwipeDismiss?: boolean;
   showCloseButton?: boolean;
 }) {
-  const SHEET_OPEN_OFFSET = 420;
-  const SHEET_CLOSE_OFFSET = 520;
+  const windowHeight = Dimensions.get("window").height;
+  const SHEET_OPEN_OFFSET = Math.max(420, Math.round(windowHeight * 0.58));
+  const SHEET_CLOSE_OFFSET = Math.max(560, Math.round(windowHeight * 0.9));
 
   const translateY = useRef(new Animated.Value(SHEET_OPEN_OFFSET)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
+
   const isClosingRef = useRef(false);
+  const isAnimatingRef = useRef(false);
 
-  useEffect(() => {
-    if (visible) {
-      isClosingRef.current = false;
-      translateY.stopAnimation();
-      backdropOpacity.stopAnimation();
-      translateY.setValue(SHEET_OPEN_OFFSET);
-      backdropOpacity.setValue(0);
+  const [mounted, setMounted] = useState(visible);
 
-      Animated.parallel([
-        Animated.timing(backdropOpacity, {
-          toValue: 1,
-          duration: 180,
-          easing: Easing.out(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.spring(translateY, {
-          toValue: 0,
-          useNativeDriver: true,
-          damping: 24,
-          stiffness: 360,
-          mass: 0.82,
-          overshootClamping: false,
-          restDisplacementThreshold: 0.4,
-          restSpeedThreshold: 0.4,
-        }),
-      ]).start();
-
-      return;
-    }
-
+  const resetAnimatedValues = useCallback(() => {
     translateY.stopAnimation();
     backdropOpacity.stopAnimation();
     translateY.setValue(SHEET_OPEN_OFFSET);
     backdropOpacity.setValue(0);
     isClosingRef.current = false;
-  }, [visible, translateY, backdropOpacity]);
+    isAnimatingRef.current = false;
+  }, [SHEET_OPEN_OFFSET, backdropOpacity, translateY]);
 
-  const finishClose = useCallback(() => {
-    if (isClosingRef.current) return;
-    isClosingRef.current = true;
-    onClose();
-  }, [onClose]);
+  const animateOpen = useCallback(() => {
+    isClosingRef.current = false;
+    isAnimatingRef.current = true;
 
-  const closeAnimated = useCallback(
-    (velocity = 1.9) => {
-      if (isClosingRef.current) return;
-      isClosingRef.current = true;
+    translateY.stopAnimation();
+    backdropOpacity.stopAnimation();
 
-      Animated.parallel([
-        Animated.timing(backdropOpacity, {
-          toValue: 0,
-          duration: 150,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.spring(translateY, {
-          toValue: SHEET_CLOSE_OFFSET,
-          velocity: Math.max(1.4, velocity),
-          damping: 22,
-          stiffness: 320,
-          mass: 0.72,
-          overshootClamping: true,
-          restDisplacementThreshold: 0.5,
-          restSpeedThreshold: 0.5,
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        if (finished) {
-          onClose();
-        } else {
-          isClosingRef.current = false;
-        }
-      });
-    },
-    [backdropOpacity, onClose, translateY]
-  );
+    translateY.setValue(SHEET_OPEN_OFFSET);
+    backdropOpacity.setValue(0);
 
-  const resetSheetPosition = useCallback(
-    (velocity = 0) => {
+    Animated.parallel([
+      Animated.timing(backdropOpacity, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }),
       Animated.spring(translateY, {
         toValue: 0,
-        velocity: Math.max(0, velocity),
         useNativeDriver: true,
-        damping: 26,
-        stiffness: 380,
+        damping: 24,
+        stiffness: 360,
         mass: 0.82,
         overshootClamping: false,
         restDisplacementThreshold: 0.4,
         restSpeedThreshold: 0.4,
-      }).start();
+      }),
+    ]).start(() => {
+      isAnimatingRef.current = false;
+    });
+  }, [SHEET_OPEN_OFFSET, backdropOpacity, translateY]);
+
+  const animateClose = useCallback(
+    (velocity = 0) => {
+      if (isClosingRef.current) return;
+
+      isClosingRef.current = true;
+      isAnimatingRef.current = true;
+
+      translateY.stopAnimation();
+      backdropOpacity.stopAnimation();
+
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 0,
+          duration: 140,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: SHEET_CLOSE_OFFSET,
+          duration: Math.max(180, Math.min(260, 220 - Math.round(Math.abs(velocity) * 18))),
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        isAnimatingRef.current = false;
+
+        if (!finished) {
+          isClosingRef.current = false;
+          return;
+        }
+
+        setMounted(false);
+        resetAnimatedValues();
+        onClose();
+      });
     },
-    [translateY]
+    [SHEET_CLOSE_OFFSET, backdropOpacity, onClose, resetAnimatedValues, translateY]
   );
+
+  const resetSheetPosition = useCallback(
+    (velocity = 0) => {
+      isAnimatingRef.current = true;
+
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 110,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(translateY, {
+          toValue: 0,
+          velocity: Math.max(0, velocity),
+          useNativeDriver: true,
+          damping: 26,
+          stiffness: 380,
+          mass: 0.82,
+          overshootClamping: false,
+          restDisplacementThreshold: 0.4,
+          restSpeedThreshold: 0.4,
+        }),
+      ]).start(() => {
+        isAnimatingRef.current = false;
+      });
+    },
+    [backdropOpacity, translateY]
+  );
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      requestAnimationFrame(() => {
+        animateOpen();
+      });
+      return;
+    }
+
+    if (mounted && !isClosingRef.current && !isAnimatingRef.current) {
+      resetAnimatedValues();
+      setMounted(false);
+    }
+  }, [visible, mounted, animateOpen, resetAnimatedValues]);
+
+  const handleRequestClose = useCallback(() => {
+    animateClose();
+  }, [animateClose]);
 
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) => {
-          if (!enableSwipeDismiss) return false;
+          if (!enableSwipeDismiss || isClosingRef.current) return false;
           const verticalIntent = Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.08;
-          return verticalIntent && gestureState.dy > 3;
+          return verticalIntent && gestureState.dy > 4;
         },
         onPanResponderGrant: () => {
-          if (!enableSwipeDismiss) return;
+          if (!enableSwipeDismiss || isClosingRef.current) return;
           translateY.stopAnimation();
           backdropOpacity.stopAnimation();
         },
         onPanResponderMove: (_, gestureState) => {
-          if (!enableSwipeDismiss) return;
+          if (!enableSwipeDismiss || isClosingRef.current) return;
+
           const nextY = Math.max(0, gestureState.dy);
           translateY.setValue(nextY);
+
           const progress = Math.min(1, nextY / SHEET_CLOSE_OFFSET);
-          backdropOpacity.setValue(1 - progress * 0.92);
+          backdropOpacity.setValue(1 - progress * 0.9);
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (!enableSwipeDismiss) return;
-          const shouldClose = gestureState.dy > 72 || gestureState.vy > 1.05;
+          if (!enableSwipeDismiss || isClosingRef.current) return;
+
+          const shouldClose = gestureState.dy > 88 || gestureState.vy > 1.15;
+
           if (shouldClose) {
-            closeAnimated(gestureState.vy);
+            animateClose(gestureState.vy);
             return;
           }
-          Animated.timing(backdropOpacity, {
-            toValue: 1,
-            duration: 110,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }).start();
+
           resetSheetPosition(Math.max(0, -gestureState.vy));
         },
         onPanResponderTerminate: () => {
-          if (!enableSwipeDismiss) return;
-          Animated.timing(backdropOpacity, {
-            toValue: 1,
-            duration: 110,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }).start();
+          if (!enableSwipeDismiss || isClosingRef.current) return;
           resetSheetPosition();
         },
         onPanResponderTerminationRequest: () => false,
       }),
-    [backdropOpacity, closeAnimated, enableSwipeDismiss, resetSheetPosition, translateY]
+    [
+      SHEET_CLOSE_OFFSET,
+      animateClose,
+      backdropOpacity,
+      enableSwipeDismiss,
+      resetSheetPosition,
+      translateY,
+    ]
   );
 
+  if (!mounted) return null;
+
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={finishClose}>
+    <Modal visible transparent animationType="none" onRequestClose={handleRequestClose}>
       <KeyboardAvoidingView behavior={IS_IOS ? "padding" : undefined} style={{ flex: 1 }}>
         <View style={{ flex: 1, justifyContent: "flex-end" }}>
           <Animated.View
@@ -221,7 +263,7 @@ export default function FancyModalShell({
 
           <Pressable
             style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }}
-            onPress={() => closeAnimated()}
+            onPress={handleRequestClose}
           />
 
           <Animated.View
@@ -273,7 +315,7 @@ export default function FancyModalShell({
               >
                 {showCloseButton ? (
                   <TouchableOpacity
-                    onPress={() => closeAnimated()}
+                    onPress={handleRequestClose}
                     hitSlop={10}
                     activeOpacity={0.7}
                     style={{

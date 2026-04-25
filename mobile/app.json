@@ -2,14 +2,14 @@
   "expo": {
     "name": "Rest Assured",
     "slug": "rest-assured",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "orientation": "portrait",
     "icon": "./assets/images/rest-assured.png",
     "scheme": "restassurednative",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "buildNumber": "23",
+      "buildNumber": "27",
       "supportsTablet": true,
       "bundleIdentifier": "com.mrk.restassured",
       "usesAppleSignIn": true,
@@ -48,7 +48,14 @@
           }
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "react-native-use-health-kit",
+        {
+          "healthSharePermission": "Rest Assured reads Apple Health data to improve coaching accuracy.",
+          "healthUpdatePermission": "Rest Assured writes workout data when needed."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

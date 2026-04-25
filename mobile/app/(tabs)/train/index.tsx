@@ -626,6 +626,7 @@ export default function TrainScreen() {
   const [sharePreviewTarget, setSharePreviewTarget] = useState<ShareSearchResult | null>(null);
 
   const [sharedVisible, setSharedVisible] = useState(false);
+  const [sharedModalEpoch, setSharedModalEpoch] = useState(0);
 
   const [manageProgram, setManageProgram] = useState<Program | null>(null);
   const [manageSplits, setManageSplits] = useState<Split[]>([]);
@@ -1279,6 +1280,21 @@ export default function TrainScreen() {
     await safeHaptics.selection();
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setProgramsExpanded((prev) => !prev);
+  }, []);
+
+  const openSharedActivity = useCallback(async () => {
+    Keyboard.dismiss();
+    await safeHaptics.selection();
+    setSharedModalEpoch((prev) => prev + 1);
+    setSharedVisible(true);
+  }, []);
+
+  const closeSharedActivity = useCallback(() => {
+    Keyboard.dismiss();
+    setSharedVisible(false);
+    requestAnimationFrame(() => {
+      setSharedModalEpoch((prev) => prev + 1);
+    });
   }, []);
 
   const closeModal = useCallback(() => {
@@ -1954,6 +1970,7 @@ export default function TrainScreen() {
 
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setSentShares((prev) => [optimisticSentShare, ...prev].slice(0, 20));
+      setSharedModalEpoch((prev) => prev + 1);
       setSharedVisible(true);
 
       await safeHaptics.notify("success");
@@ -2038,6 +2055,7 @@ export default function TrainScreen() {
           setProgramsExpanded(true);
         }
 
+        setSharedModalEpoch((prev) => prev + 1);
         setSharedVisible(true);
 
         Toast.show({
@@ -2051,7 +2069,15 @@ export default function TrainScreen() {
         setBusy(false);
       }
     },
-    [fetchPendingShares, fetchSentShares, fetchPrograms, fetchProgramImports, fetchSplitCounts, fetchRecentImports, userId]
+    [
+      fetchPendingShares,
+      fetchSentShares,
+      fetchPrograms,
+      fetchProgramImports,
+      fetchSplitCounts,
+      fetchRecentImports,
+      userId,
+    ]
   );
 
   const handleDeclineShare = useCallback(
@@ -2187,7 +2213,7 @@ export default function TrainScreen() {
             </View>
 
             <TouchableOpacity
-              onPress={() => setSharedVisible(true)}
+              onPress={() => void openSharedActivity()}
               activeOpacity={0.8}
               hitSlop={10}
               style={[getChevronButtonStyle(t), styles.sharedActivityButton]}
@@ -2653,8 +2679,9 @@ export default function TrainScreen() {
       </FancyModalShell>
 
       <FancyModalShell
+        key={`shared-activity-${sharedModalEpoch}`}
         visible={sharedVisible}
-        onClose={() => setSharedVisible(false)}
+        onClose={closeSharedActivity}
         title="Shared activity"
         subtitle="Incoming requests, recent sent shares, and imports"
         t={t}

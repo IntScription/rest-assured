@@ -51,6 +51,10 @@ const TAB_META: Record<string, TabConfig> = {
     label: "Skills",
     icon: "flash-outline",
   },
+  "coach/index": {
+    label: "Coach",
+    icon: "sparkles-outline",
+  },
   profile: {
     label: "Profile",
     icon: "person-outline",
@@ -61,6 +65,7 @@ function normalizeRouteName(routeName: string) {
   if (TAB_META[routeName]) return routeName;
   if (routeName.startsWith("train")) return "train/index";
   if (routeName.startsWith("skills")) return "skills/index";
+  if (routeName.startsWith("coach")) return "coach/index";
   return routeName;
 }
 
@@ -74,6 +79,8 @@ function getFocusedIcon(
       return "barbell";
     case "flash-outline":
       return "flash";
+    case "sparkles-outline":
+      return "sparkles";
     case "person-outline":
       return "person";
     default:

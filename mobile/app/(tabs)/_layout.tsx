@@ -35,6 +35,13 @@ export default function TabsLayout() {
       />
 
       <Tabs.Screen
+        name="coach/index"
+        options={{
+          title: "Coach",
+        }}
+      />
+
+      <Tabs.Screen
         name="profile"
         options={{
           title: "Profile",

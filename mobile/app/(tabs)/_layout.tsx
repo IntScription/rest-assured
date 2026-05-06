@@ -11,6 +11,18 @@ export default function TabsLayout() {
         headerShown: false,
         lazy: false,
         freezeOnBlur: false,
+        tabBarHideOnKeyboard: false,
+        tabBarStyle: {
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 0,
+          borderTopWidth: 0,
+          backgroundColor: "transparent",
+          elevation: 0,
+          shadowOpacity: 0,
+        },
       }}
     >
       <Tabs.Screen

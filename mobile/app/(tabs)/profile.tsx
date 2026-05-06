@@ -3,11 +3,15 @@ import {
   getThemePreference,
   setThemePreference,
 } from "@/hooks/use-color-scheme";
-import { startOnboarding } from "@/src/lib/onboarding";
+import {
+  setOnboardingStep,
+  startOnboarding,
+  stopOnboarding,
+} from "@/src/lib/onboarding";
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
 import { Ionicons } from "@expo/vector-icons";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import type { User } from "@supabase/supabase-js";
 import { BlurView } from "expo-blur";
 import Constants from "expo-constants";
@@ -17,6 +21,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Image,
   Linking,
   Modal,
@@ -31,7 +37,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const VERSION = "1.1.1";
+const VERSION = "1.1.3";
 const APP_STORE_ID = "6760107763";
 const APP_STORE_REVIEW_URL = `itms-apps://itunes.apple.com/app/id${APP_STORE_ID}?action=write-review`;
 const APP_STORE_WEB_REVIEW_URL = `https://apps.apple.com/app/id${APP_STORE_ID}?action=write-review`;
@@ -136,10 +142,174 @@ function getAvatarMimeType(ext: string) {
   return "image/jpeg";
 }
 
+function isDarkHexColor(color?: string) {
+  if (!color?.startsWith("#")) return false;
+
+  const raw = color.replace("#", "");
+  const hex = raw.length === 3 ? raw.split("").map((ch) => ch + ch).join("") : raw;
+  const value = Number.parseInt(hex.slice(0, 6), 16);
+
+  if (Number.isNaN(value)) return false;
+
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+
+  return 0.299 * r + 0.587 * g + 0.114 * b < 150;
+}
+
+function getProfileScreenPalette(background: string) {
+  const isDark = isDarkHexColor(background);
+
+  return {
+    base: isDark ? "#080B14" : "#EEF2F7",
+    glowPrimary: isDark ? "rgba(14,165,233,0.17)" : "rgba(14,116,144,0.14)",
+    glowSecondary: isDark ? "rgba(168,85,247,0.13)" : "rgba(124,58,237,0.11)",
+    glowWarm: isDark ? "rgba(245,158,11,0.09)" : "rgba(217,119,6,0.10)",
+  };
+}
+
 export default function ProfileScreen() {
   const t = useAppTheme();
   const router = useRouter();
-  const tabBarHeight = useBottomTabBarHeight();
+  const bottomPadding = useCustomTabBarBottomPadding(26);
+  const screenPalette = useMemo(() => getProfileScreenPalette(t.background), [t.background]);
+
+  const backgroundFloatA = useRef(new Animated.Value(0)).current;
+  const backgroundFloatB = useRef(new Animated.Value(0)).current;
+  const backgroundFloatC = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    backgroundFloatA.setValue(0);
+    backgroundFloatB.setValue(0);
+    backgroundFloatC.setValue(0);
+
+    const loops = [
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatA, {
+            toValue: 1,
+            duration: 21000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatA, {
+            toValue: 0,
+            duration: 21000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatB, {
+            toValue: 1,
+            duration: 25000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatB, {
+            toValue: 0,
+            duration: 25000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatC, {
+            toValue: 1,
+            duration: 29000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatC, {
+            toValue: 0,
+            duration: 29000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+    ];
+
+    loops.forEach((loop) => loop.start());
+
+    return () => {
+      loops.forEach((loop) => loop.stop());
+    };
+  }, [backgroundFloatA, backgroundFloatB, backgroundFloatC]);
+
+  const profileGlowTopMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -20],
+        }),
+      },
+      {
+        translateY: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 22],
+        }),
+      },
+      {
+        scale: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.05],
+        }),
+      },
+    ],
+  };
+
+  const profileGlowMidMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 26],
+        }),
+      },
+      {
+        translateY: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -18],
+        }),
+      },
+      {
+        scale: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.055],
+        }),
+      },
+    ],
+  };
+
+  const profileGlowBottomMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -22],
+        }),
+      },
+      {
+        translateY: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -24],
+        }),
+      },
+      {
+        scale: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.045],
+        }),
+      },
+    ],
+  };
 
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [user, setUser] = useState<User | null>(null);
@@ -369,6 +539,7 @@ export default function ProfileScreen() {
   const usernameDisplay = profile?.username ? `@${profile.username}` : "No username yet";
   const usernameExists = !!profile?.username;
   const trimmedBio = profile?.bio?.trim() ?? "";
+  const profileCardBioDisplay = trimmedBio || "Add a short bio in edit profile.";
   const hasAvatar = !!profile?.avatar_url;
   const canUseNativeImagePicker = Constants.isDevice === true;
 
@@ -816,8 +987,18 @@ export default function ProfileScreen() {
       await safeHaptic(() =>
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
       );
+
+      // Clear any half-finished previous tour state, then start from
+      // the first Train onboarding step again. This keeps Replay Tutorial
+      // from reopening Welcome with an old step like "done" or "go_home".
+      await stopOnboarding();
+      await setOnboardingStep("create_program");
       await startOnboarding();
-      router.push("/welcome");
+
+      router.replace({
+        pathname: "/welcome",
+        params: { mode: "setup", replay: "1" },
+      });
     } catch {
       Alert.alert("Could not open tutorial", "Please try again.");
     } finally {
@@ -1200,22 +1381,47 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView
-      style={[styles.safe, { backgroundColor: t.background }]}
+      style={[styles.safe, { backgroundColor: screenPalette.base }]}
       edges={["top"]}
     >
+      <View pointerEvents="none" style={styles.backgroundLayer}>
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.profileGlowTop,
+            { backgroundColor: screenPalette.glowPrimary },
+            profileGlowTopMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.profileGlowMid,
+            { backgroundColor: screenPalette.glowSecondary },
+            profileGlowMidMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.profileGlowBottom,
+            { backgroundColor: screenPalette.glowWarm },
+            profileGlowBottomMotion,
+          ]}
+        />
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: tabBarHeight + 16 },
+          { paddingBottom: bottomPadding },
         ]}
         removeClippedSubviews={Platform.OS === "android"}
       >
         <Text style={[styles.header, { color: t.text }]}>Profile</Text>
 
         <View style={styles.group}>
-          <Text style={[styles.groupTitle, { color: t.mutedText }]}>Username</Text>
-
           <View
             style={[
               styles.usernameCard,
@@ -1225,6 +1431,7 @@ export default function ProfileScreen() {
               },
             ]}
           >
+
             <Pressable
               onPress={() => {
                 void openAvatarPreview();
@@ -1252,7 +1459,7 @@ export default function ProfileScreen() {
 
             <View style={styles.usernameContent}>
               <View style={styles.usernameTopRow}>
-                <View style={{ flex: 1 }}>
+                <View style={styles.usernameTextBlock}>
                   <Text
                     style={[styles.usernameValue, { color: t.text }]}
                     numberOfLines={1}
@@ -1265,36 +1472,37 @@ export default function ProfileScreen() {
                       style={[styles.usernameBioStandalone, { color: t.mutedText }]}
                       numberOfLines={3}
                     >
-                      {trimmedBio}
+                      {profileCardBioDisplay}
                     </Text>
                   ) : (
                     <Text
                       style={[styles.usernameBioPlaceholder, { color: t.mutedText }]}
                       numberOfLines={2}
                     >
-                      Add a short bio in edit profile.
+                      {profileCardBioDisplay}
                     </Text>
                   )}
                 </View>
-
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={openProfileEditor}
-                  style={[
-                    styles.editChip,
-                    {
-                      backgroundColor: t.cardAlt,
-                      borderColor: t.border,
-                    },
-                  ]}
-                >
-                  <Ionicons name="create-outline" size={15} color={t.text} />
-                  <Text style={{ color: t.text, fontSize: 13, fontWeight: "700" }}>
-                    {usernameExists ? "Edit" : "Set"}
-                  </Text>
-                </TouchableOpacity>
               </View>
             </View>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={openProfileEditor}
+              hitSlop={8}
+              style={[
+                styles.editChip,
+                {
+                  backgroundColor: t.cardAlt,
+                  borderColor: t.border,
+                },
+              ]}
+            >
+              <Ionicons name="create-outline" size={15} color={t.text} />
+              <Text style={{ color: t.text, fontSize: 13, fontWeight: "800" }}>
+                {usernameExists ? "Edit" : "Set"}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -1980,8 +2188,38 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  scrollContent: {},
+  safe: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  backgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  backgroundGlow: {
+    position: "absolute",
+    borderRadius: 999,
+  },
+  profileGlowTop: {
+    width: 260,
+    height: 260,
+    top: -96,
+    right: -100,
+  },
+  profileGlowMid: {
+    width: 220,
+    height: 220,
+    top: 340,
+    left: -122,
+  },
+  profileGlowBottom: {
+    width: 280,
+    height: 280,
+    bottom: -150,
+    right: -120,
+  },
+  scrollContent: {
+    paddingTop: 2,
+  },
   header: {
     fontSize: 32,
     fontWeight: "700",
@@ -2003,12 +2241,19 @@ const styles = StyleSheet.create({
 
   usernameCard: {
     marginHorizontal: 16,
-    borderRadius: 24,
+    borderRadius: 28,
     borderWidth: 1,
     padding: 16,
+    paddingRight: 92,
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
+    position: "relative",
+    overflow: "hidden",
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
   },
   avatarPressableOnly: {
     alignItems: "center",
@@ -2021,9 +2266,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2.5,
-    shadowOpacity: 0.18,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 7 },
     elevation: 4,
   },
   avatar: {
@@ -2037,37 +2282,53 @@ const styles = StyleSheet.create({
   },
   usernameContent: {
     flex: 1,
+    minWidth: 0,
   },
   usernameTopRow: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 12,
+  },
+  usernameTextBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   usernameValue: {
     fontSize: 22,
+    lineHeight: 27,
     fontWeight: "800",
-    letterSpacing: -0.4,
+    letterSpacing: -0.45,
+    paddingRight: 4,
   },
   usernameBioStandalone: {
-    fontSize: 13.5,
-    lineHeight: 20,
+    fontSize: 14.5,
+    lineHeight: 21,
     marginTop: 10,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   usernameBioPlaceholder: {
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 14,
+    lineHeight: 20,
     marginTop: 10,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   editChip: {
+    position: "absolute",
+    right: 16,
+    top: "50%",
+    height: 36,
     borderWidth: 1,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 11,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
+    transform: [{ translateY: -18 }],
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
 
   helperText: {
@@ -2086,10 +2347,14 @@ const styles = StyleSheet.create({
   },
 
   groupCard: {
-    borderRadius: 18,
+    borderRadius: 22,
     overflow: "hidden",
     marginHorizontal: 16,
     borderWidth: 1,
+    shadowOpacity: 0.045,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 2,
   },
   row: {
     minHeight: 58,

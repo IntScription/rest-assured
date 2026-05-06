@@ -1,13 +1,11 @@
-"use client";
-
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  View,
-  Text,
   StyleSheet,
+  Text,
   TextInput,
   ScrollView,
   TouchableOpacity,
+  View,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -249,7 +247,7 @@ function SectionCard({
   title: string;
   icon: keyof typeof Ionicons.glyphMap;
   t: any;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <View

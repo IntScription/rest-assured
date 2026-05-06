@@ -49,6 +49,7 @@ import {
 } from "@/src/features/skills/utils/skill-status-sync";
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
 
 type SummaryCardProps = {
   label: string;
@@ -285,8 +286,52 @@ function getSortMeta(sortBy: SortOption) {
   }
 }
 
+function getSectionBackground(
+  t: ReturnType<typeof useAppTheme>,
+  tone: "progress" | "explore" | "challenges"
+) {
+  const palettes = {
+    progress: {
+      light: "#EEF4FF",
+      dark: "#07172B",
+    },
+    explore: {
+      light: "#ECFDF5",
+      dark: "#052017",
+    },
+    challenges: {
+      light: "#FFF4E6",
+      dark: "#211407",
+    },
+  } as const;
+
+  const raw = String(t.background ?? "").trim();
+  const hex = raw.replace("#", "");
+
+  let isDark = false;
+
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    isDark = luminance < 0.5;
+  } else if (raw.toLowerCase().includes("rgb")) {
+    const nums = raw.match(/\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    if (nums.length >= 3) {
+      const [r, g, b] = nums;
+      const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      isDark = luminance < 0.5;
+    }
+  }
+
+  return isDark ? palettes[tone].dark : palettes[tone].light;
+}
+
 export default function ProgressSection() {
   const t = useAppTheme();
+  const sectionBackground = getSectionBackground(t, "progress");
+  const tabBottomPadding = useCustomTabBarBottomPadding(20);
   const router = useRouter();
   const { width } = useWindowDimensions();
 
@@ -902,8 +947,8 @@ export default function ProgressSection() {
 
   if (loading) {
     return (
-      <View style={[styles.screen, { backgroundColor: t.background }]}>
-        <View style={styles.content}>
+      <View style={[styles.screen, { backgroundColor: sectionBackground }]}>
+        <View style={[styles.content, { paddingBottom: tabBottomPadding }]}>
           <View
             style={[
               styles.dashboardCard,
@@ -984,7 +1029,7 @@ export default function ProgressSection() {
   }
 
   return (
-    <View style={[styles.screen, { backgroundColor: t.background }]}>
+    <View style={[styles.screen, { backgroundColor: sectionBackground }]}>
       {toast ? (
         <Animated.View
           pointerEvents="none"
@@ -1014,7 +1059,7 @@ export default function ProgressSection() {
         key={numColumns}
         numColumns={numColumns}
         keyExtractor={(item) => item.userSkill.id}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabBottomPadding }]}
         columnWrapperStyle={numColumns > 1 ? { gap: cardGap } : undefined}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={refresh} />
@@ -1343,7 +1388,7 @@ export default function ProgressSection() {
                   <View
                     style={[
                       styles.skillPickIconWrap,
-                      { backgroundColor: t.background },
+                      { backgroundColor: sectionBackground },
                     ]}
                   >
                     <Ionicons name="flash-outline" size={18} color={t.text} />
@@ -1867,7 +1912,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 96,
+    paddingBottom: 18,
   },
 
   dashboardCard: {

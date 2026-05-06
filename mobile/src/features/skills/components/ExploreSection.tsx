@@ -19,6 +19,7 @@ import type { Skill } from "@/src/features/skills/types";
 import { importGlobalProgramToTrain } from "@/src/features/skills/utils/import-global-program";
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
 
 type ProfileLite = {
   id: string;
@@ -111,8 +112,52 @@ function sortSplits(items: LocalSplitRow[]) {
   return [...items].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
 }
 
+function getSectionBackground(
+  t: ReturnType<typeof useAppTheme>,
+  tone: "progress" | "explore" | "challenges"
+) {
+  const palettes = {
+    progress: {
+      light: "#EEF4FF",
+      dark: "#07172B",
+    },
+    explore: {
+      light: "#ECFDF5",
+      dark: "#052017",
+    },
+    challenges: {
+      light: "#FFF4E6",
+      dark: "#211407",
+    },
+  } as const;
+
+  const raw = String(t.background ?? "").trim();
+  const hex = raw.replace("#", "");
+
+  let isDark = false;
+
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    isDark = luminance < 0.5;
+  } else if (raw.toLowerCase().includes("rgb")) {
+    const nums = raw.match(/\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    if (nums.length >= 3) {
+      const [r, g, b] = nums;
+      const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      isDark = luminance < 0.5;
+    }
+  }
+
+  return isDark ? palettes[tone].dark : palettes[tone].light;
+}
+
 export default function ExploreSection() {
   const t = useAppTheme();
+  const sectionBackground = getSectionBackground(t, "explore");
+  const tabBottomPadding = useCustomTabBarBottomPadding(20);
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -855,18 +900,18 @@ export default function ExploreSection() {
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: t.background }]}>
+      <View style={[styles.center, { backgroundColor: sectionBackground }]}>
         <ActivityIndicator size="large" color={t.text} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.screen, { backgroundColor: t.background }]}>
+    <View style={[styles.screen, { backgroundColor: sectionBackground }]}>
       <FlatList
         data={filteredSkills}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabBottomPadding }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
         }
@@ -1699,7 +1744,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 36,
+    paddingBottom: 18,
   },
 
   header: {

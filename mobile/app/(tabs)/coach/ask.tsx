@@ -1,31 +1,29 @@
-"use client";
-
 import { useEffect, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  FlatList,
   ActivityIndicator,
   Alert,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { supabase } from "@/src/lib/supabase";
-import { useAppTheme } from "@/src/theme/theme";
-import { buildCoachAskContext } from "@/src/features/coach/lib/coach-queries";
+import CoachBackHeader from "@/src/features/coach/components/CoachBackHeader";
 import { askCoach } from "@/src/features/coach/api/askCoach";
 import { useLocalCoach } from "@/src/features/coach/hooks/useLocalCoach";
+import { buildCoachAskContext } from "@/src/features/coach/lib/coach-queries";
 import {
   getCoachDisplayLabel,
   getCoachRuntimeMode,
 } from "@/src/features/coach/services/coach-runtime";
-import CoachBackHeader from "@/src/features/coach/components/CoachBackHeader";
+import { supabase } from "@/src/lib/supabase";
+import { useAppTheme } from "@/src/theme/theme";
 
 type Message = {
   id: string;
@@ -43,6 +41,8 @@ const QUICK_PROMPTS = [
 
 export default function AskCoachScreen() {
   const t = useAppTheme();
+  const insets = useSafeAreaInsets();
+
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -58,6 +58,7 @@ export default function AskCoachScreen() {
     (async () => {
       const { data } = await supabase.auth.getSession();
       const uid = data.session?.user?.id ?? null;
+
       if (!active) return;
       setUserId(uid);
 
@@ -86,10 +87,10 @@ export default function AskCoachScreen() {
   }, []);
 
   const canUseLocal =
-    runtimeMode === "local_ai" || (runtimeMode === "auto" && localCoach.isAvailable);
+    runtimeMode === "local_ai" ||
+    (runtimeMode === "auto" && localCoach.isAvailable);
 
-  const canUseHosted =
-    runtimeMode === "hosted_ai" || runtimeMode === "auto";
+  const canUseHosted = runtimeMode === "hosted_ai" || runtimeMode === "auto";
 
   const modeLabel = useMemo(
     () => getCoachDisplayLabel({ canUseLocal, canUseHosted }),
@@ -156,9 +157,7 @@ export default function AskCoachScreen() {
 
           return;
         } catch (localError) {
-          if (!canUseHosted) {
-            throw localError;
-          }
+          if (!canUseHosted) throw localError;
         }
       }
 
@@ -183,7 +182,10 @@ export default function AskCoachScreen() {
         "Neither on-device AI nor cloud AI is available right now."
       );
     } catch (error: any) {
-      Alert.alert("Ask Coach failed", String(error?.message ?? "Something went wrong."));
+      Alert.alert(
+        "Ask Coach failed",
+        String(error?.message ?? "Something went wrong.")
+      );
     } finally {
       setSending(false);
     }
@@ -206,7 +208,7 @@ export default function AskCoachScreen() {
         style={styles.container}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+        <View style={styles.headerWrap}>
           <CoachBackHeader
             title="Ask Coach"
             subtitle="Ask about training, recovery, or performance."
@@ -244,9 +246,7 @@ export default function AskCoachScreen() {
                 },
               ]}
             />
-            <Text style={[styles.modeText, { color: t.text }]}>
-              {modeLabel}
-            </Text>
+            <Text style={[styles.modeText, { color: t.text }]}>{modeLabel}</Text>
           </View>
         </View>
 
@@ -265,13 +265,15 @@ export default function AskCoachScreen() {
                 Start a conversation
               </Text>
               <Text style={[styles.emptyText, { color: t.mutedText }]}>
-                Coach already knows your profile, recovery, insights, and recent training context.
+                Coach already knows your profile, recovery, insights, and recent
+                training context.
               </Text>
 
               <View style={styles.promptWrap}>
                 {QUICK_PROMPTS.map((prompt) => (
                   <TouchableOpacity
                     key={prompt}
+                    activeOpacity={0.86}
                     style={[
                       styles.promptChip,
                       {
@@ -296,6 +298,7 @@ export default function AskCoachScreen() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => {
               const isUser = item.role === "user";
 
@@ -362,6 +365,7 @@ export default function AskCoachScreen() {
             {
               borderTopColor: t.border,
               backgroundColor: t.background,
+              paddingBottom: Math.max(insets.bottom, 12),
             },
           ]}
         >
@@ -379,12 +383,7 @@ export default function AskCoachScreen() {
               onChangeText={setInput}
               placeholder="Ask Coach something..."
               placeholderTextColor={t.mutedText}
-              style={[
-                styles.input,
-                {
-                  color: t.text,
-                },
-              ]}
+              style={[styles.input, { color: t.text }]}
               multiline
             />
           </View>
@@ -392,6 +391,7 @@ export default function AskCoachScreen() {
           <TouchableOpacity
             onPress={() => handleSend()}
             disabled={sending || !input.trim()}
+            activeOpacity={0.86}
             style={[
               styles.sendButton,
               {
@@ -412,19 +412,23 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
+  headerWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+  },
   headerCard: {
     borderWidth: 1,
-    borderRadius: 24,
-    padding: 14,
+    borderRadius: 22,
+    padding: 12,
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   modePill: {
     alignSelf: "flex-start",
     borderWidth: 1,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -442,6 +446,7 @@ const styles = StyleSheet.create({
   emptyWrap: {
     flex: 1,
     paddingHorizontal: 16,
+    justifyContent: "flex-start",
   },
   emptyCard: {
     borderWidth: 1,
@@ -475,7 +480,7 @@ const styles = StyleSheet.create({
 
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingBottom: 12,
     gap: 12,
   },
   messageBubble: {
@@ -514,8 +519,7 @@ const styles = StyleSheet.create({
   inputBar: {
     borderTopWidth: 1,
     paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 12,
+    paddingTop: 10,
     flexDirection: "row",
     gap: 10,
     alignItems: "flex-end",

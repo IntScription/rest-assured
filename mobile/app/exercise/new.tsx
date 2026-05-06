@@ -12,6 +12,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Animated,
+  Easing,
+  StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -46,16 +49,24 @@ const MAX_NAME_LENGTH = 60;
 const DUPLICATE_CHECK_DELAY = 220;
 
 const SUGGESTED_EXERCISES = [
-  "Bench Press",
+  "Weighted Pull-Up",
+  "Bodyweight Pull-Up",
+  "Weighted Dip",
+  "Bodyweight Dip",
   "Incline Dumbbell Press",
-  "Overhead Press",
-  "Lateral Raise",
-  "Tricep Pushdown",
-  "Pull-Up",
-  "Lat Pulldown",
-  "Barbell Row",
+  "Cable Lateral Raise",
+  "Pike Push-Up",
+  "Single Arm Cable Fly",
   "Pendlay Row",
   "Face Pull",
+  "Australian Pull-Up",
+  "Dragon Flag",
+  "Pallof Press",
+  "Bench Press",
+  "Overhead Press",
+  "Tricep Pushdown",
+  "Lat Pulldown",
+  "Barbell Row",
   "Bicep Curl",
   "Hammer Curl",
   "Squat",
@@ -66,6 +77,37 @@ const SUGGESTED_EXERCISES = [
   "Calf Raise",
   "Dead Hang",
 ];
+
+const SPECIAL_TITLE_WORDS: Record<string, string> = {
+  ab: "AB",
+  abs: "Abs",
+  bb: "BB",
+  bw: "BW",
+  db: "DB",
+  ez: "EZ",
+  kg: "kg",
+  lbs: "lbs",
+  pr: "PR",
+  rm: "RM",
+  rom: "ROM",
+  tut: "TUT",
+};
+
+const LIGHT_SCREEN = {
+  base: "#EEF4FF",
+  glowPrimary: "rgba(37,99,235,0.16)",
+  glowSecondary: "rgba(139,92,246,0.12)",
+  glowWarm: "rgba(16,185,129,0.10)",
+  footer: "rgba(238,244,255,0.96)",
+};
+
+const DARK_SCREEN = {
+  base: "#050A14",
+  glowPrimary: "rgba(59,130,246,0.24)",
+  glowSecondary: "rgba(139,92,246,0.20)",
+  glowWarm: "rgba(16,185,129,0.14)",
+  footer: "rgba(5,10,20,0.96)",
+};
 
 function getFirstParam(value?: string | string[]) {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -80,16 +122,56 @@ function titleCaseWords(value: string) {
   return normalizeExerciseName(value)
     .split(" ")
     .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .map((word) => {
+      const raw = word.trim();
+      const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (SPECIAL_TITLE_WORDS[compact]) return SPECIAL_TITLE_WORDS[compact];
+
+      if (/^\d/.test(raw)) return raw.toUpperCase();
+      if (raw.includes("-") || raw.includes("/")) {
+        return raw
+          .split(/([-/])/)
+          .map((part) => {
+            if (part === "-" || part === "/") return part;
+            const key = part.toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (SPECIAL_TITLE_WORDS[key]) return SPECIAL_TITLE_WORDS[key];
+            return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+          })
+          .join("");
+      }
+
+      return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+    })
     .join(" ");
 }
 
 function generateSlug(value: string) {
   return normalizeExerciseName(value)
     .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
+    .replace(/&/g, "and")
+    .replace(/\+/g, "plus")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
     .replace(/-+/g, "-");
+}
+
+function isDarkColor(color?: string) {
+  if (!color?.startsWith("#")) return false;
+
+  const raw = color.replace("#", "");
+  const hex = raw.length === 3 ? raw.split("").map((ch) => ch + ch).join("") : raw;
+  const value = Number.parseInt(hex.slice(0, 6), 16);
+  if (Number.isNaN(value)) return false;
+
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+
+  return 0.299 * r + 0.587 * g + 0.114 * b < 150;
+}
+
+function getScreenPalette(t: any) {
+  return isDarkColor(t.background) || isDarkColor(t.card) ? DARK_SCREEN : LIGHT_SCREEN;
 }
 
 function normalizeForDuplicateCheck(value: string) {
@@ -120,22 +202,26 @@ function getSplitBasedSuggestions(splitName: string | undefined | null) {
     lower.includes("tricep")
   ) {
     return [
-      "Bench Press",
+      "Weighted Dip",
+      "Bodyweight Dip",
       "Incline Dumbbell Press",
+      "Cable Lateral Raise",
+      "Pike Push-Up",
+      "Single Arm Cable Fly",
       "Overhead Press",
-      "Lateral Raise",
       "Tricep Pushdown",
-      "Dips",
     ];
   }
 
   if (lower.includes("pull") || lower.includes("back") || lower.includes("bicep")) {
     return [
-      "Pull-Up",
-      "Lat Pulldown",
-      "Barbell Row",
+      "Weighted Pull-Up",
+      "Bodyweight Pull-Up",
       "Pendlay Row",
       "Face Pull",
+      "Australian Pull-Up",
+      "Lat Pulldown",
+      "Barbell Row",
       "Hammer Curl",
     ];
   }
@@ -154,14 +240,16 @@ function getSplitBasedSuggestions(splitName: string | undefined | null) {
       "Leg Curl",
       "Leg Extension",
       "Calf Raise",
+      "Sissy Squat",
+      "Bulgarian Split Squat",
     ];
   }
 
   if (lower.includes("core") || lower.includes("abs")) {
-    return ["Dragon Flag", "Hanging Knee Raise", "Cable Crunch", "Plank", "L-Sit", "Ab Wheel"];
+    return ["Dragon Flag", "Pallof Press", "Hanging Knee Raise", "Cable Crunch", "Plank", "L-Sit", "Ab Wheel"];
   }
 
-  return SUGGESTED_EXERCISES.slice(0, 8);
+  return SUGGESTED_EXERCISES.slice(0, 10);
 }
 
 export default function NewExerciseScreen() {
@@ -174,9 +262,14 @@ export default function NewExerciseScreen() {
     programId?: string | string[];
   }>();
   const t = useAppTheme();
+  const screenPalette = useMemo(() => getScreenPalette(t), [t]);
+  const statusBarStyle = screenPalette === DARK_SCREEN ? "light-content" : "dark-content";
 
   const inputRef = useRef<TextInput>(null);
   const mountedRef = useRef(true);
+  const glowTopAnim = useRef(new Animated.Value(0)).current;
+  const glowMidAnim = useRef(new Animated.Value(0)).current;
+  const glowBottomAnim = useRef(new Animated.Value(0)).current;
 
   const incomingTourStep = getFirstParam(params.tourStep);
   const tutorialProgramId = getFirstParam(params.tutorialProgramId);
@@ -206,6 +299,7 @@ export default function NewExerciseScreen() {
   const [existingExercises, setExistingExercises] = useState<ExistingExerciseLite[]>([]);
   const [recentExercises, setRecentExercises] = useState<ExistingExerciseLite[]>([]);
   const [duplicateMatch, setDuplicateMatch] = useState<ExistingExerciseLite | null>(null);
+  const [crossSplitMatches, setCrossSplitMatches] = useState<ExistingExerciseLite[]>([]);
   const [forceCreateDuplicate, setForceCreateDuplicate] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
@@ -223,6 +317,16 @@ export default function NewExerciseScreen() {
     () => splits.find((split) => split.id === selectedSplitId) ?? null,
     [splits, selectedSplitId]
   );
+
+  const splitNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    splits.forEach((split) => {
+      map[split.id] = split.name;
+    });
+    return map;
+  }, [splits]);
+
+  const primaryCrossSplitMatch = crossSplitMatches[0] ?? null;
 
   const splitSuggestions = useMemo(
     () => getSplitBasedSuggestions(selectedSplit?.name ?? preferredSplitName),
@@ -286,12 +390,15 @@ export default function NewExerciseScreen() {
 
   const clearName = useCallback(() => {
     setName("");
+    setDuplicateMatch(null);
+    setCrossSplitMatches([]);
     resetFeedback();
     focusInputSoon();
   }, [focusInputSoon, resetFeedback]);
 
   const handleUseSuggestion = useCallback(
     (value: string) => {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setName(titleCaseWords(value));
       resetFeedback();
       focusInputSoon();
@@ -313,6 +420,105 @@ export default function NewExerciseScreen() {
       mountedRef.current = false;
     };
   }, []);
+
+
+  useEffect(() => {
+    const loops = [
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(glowTopAnim, {
+            toValue: 1,
+            duration: 15500,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowTopAnim, {
+            toValue: 0,
+            duration: 15500,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(glowMidAnim, {
+            toValue: 1,
+            duration: 18500,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowMidAnim, {
+            toValue: 0,
+            duration: 18500,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(glowBottomAnim, {
+            toValue: 1,
+            duration: 21000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowBottomAnim, {
+            toValue: 0,
+            duration: 21000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+    ];
+
+    loops.forEach((loop) => loop.start());
+    return () => loops.forEach((loop) => loop.stop());
+  }, [glowBottomAnim, glowMidAnim, glowTopAnim]);
+
+  const glowTopMotion = {
+    transform: [
+      {
+        translateX: glowTopAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -22] }),
+      },
+      {
+        translateY: glowTopAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 28] }),
+      },
+      {
+        scale: glowTopAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }),
+      },
+    ],
+  };
+
+  const glowMidMotion = {
+    transform: [
+      {
+        translateX: glowMidAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 26] }),
+      },
+      {
+        translateY: glowMidAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -18] }),
+      },
+      {
+        scale: glowMidAnim.interpolate({ inputRange: [0, 1], outputRange: [1.03, 0.96] }),
+      },
+    ],
+  };
+
+  const glowBottomMotion = {
+    transform: [
+      {
+        translateX: glowBottomAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -30] }),
+      },
+      {
+        translateY: glowBottomAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -24] }),
+      },
+      {
+        scale: glowBottomAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }),
+      },
+    ],
+  };
 
   useEffect(() => {
     const loadTour = async () => {
@@ -475,6 +681,7 @@ export default function NewExerciseScreen() {
   useEffect(() => {
     if (!normalizedName || !selectedSplitId) {
       setDuplicateMatch(null);
+      setCrossSplitMatches([]);
       setForceCreateDuplicate(false);
       setDuplicateLoading(false);
       return;
@@ -484,15 +691,17 @@ export default function NewExerciseScreen() {
 
     const timeout = setTimeout(() => {
       const normalized = normalizeForDuplicateCheck(normalizedName);
-      const exactMatch =
-        existingExercises.find(
-          (exercise) =>
-            normalizeForDuplicateCheck(exercise.name) === normalized &&
-            exercise.split_id === selectedSplitId
-        ) ?? null;
+      const sameNameExercises = existingExercises.filter(
+        (exercise) => normalizeForDuplicateCheck(exercise.name) === normalized
+      );
+      const exactMatch = sameNameExercises.find((exercise) => exercise.split_id === selectedSplitId) ?? null;
+      const otherSplitMatches = sameNameExercises.filter(
+        (exercise) => exercise.split_id && exercise.split_id !== selectedSplitId
+      );
 
       if (!mountedRef.current) return;
       setDuplicateMatch(exactMatch);
+      setCrossSplitMatches(otherSplitMatches.slice(0, 3));
       setForceCreateDuplicate(false);
       setDuplicateLoading(false);
     }, DUPLICATE_CHECK_DELAY);
@@ -592,9 +801,14 @@ export default function NewExerciseScreen() {
           return next.slice(0, 6);
         });
 
-        setStatusMsg(mode === "stay" ? "Exercise created. You can add another one." : "Exercise created.");
+        setStatusMsg(
+          mode === "stay"
+            ? `${createdExercise.name} created in ${selectedSplit?.name ?? "this split"}. Add another one.`
+            : `${createdExercise.name} created in ${selectedSplit?.name ?? "this split"}.`
+        );
         setName("");
         setDuplicateMatch(null);
+        setCrossSplitMatches([]);
         setForceCreateDuplicate(false);
         setCreateSuccess(true);
 
@@ -651,6 +865,7 @@ export default function NewExerciseScreen() {
       prettyName,
       resolvedProgramId,
       router,
+      selectedSplit?.name,
       selectedSplitId,
       slugBase,
       tourActive,
@@ -662,14 +877,44 @@ export default function NewExerciseScreen() {
 
   if (authLoading || splitsLoading) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: screenPalette.base }]}>
+        <StatusBar barStyle={statusBarStyle} backgroundColor={screenPalette.base} />
         <ActivityIndicator color={t.primaryBg} />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: t.background }]} edges={["top", "left", "right"]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: screenPalette.base }]} edges={["top", "left", "right"]}>
+      <StatusBar barStyle={statusBarStyle} backgroundColor={screenPalette.base} />
+
+      <View pointerEvents="none" style={styles.backgroundLayer}>
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.glowTop,
+            { backgroundColor: screenPalette.glowPrimary },
+            glowTopMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.glowMid,
+            { backgroundColor: screenPalette.glowSecondary },
+            glowMidMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.glowBottom,
+            { backgroundColor: screenPalette.glowWarm },
+            glowBottomMotion,
+          ]}
+        />
+      </View>
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -725,10 +970,13 @@ export default function NewExerciseScreen() {
                     <Text style={[styles.emptyText, { color: t.mutedText }]}>Exercises belong inside a split like Push, Pull, Legs, or Core.</Text>
                   </View>
                   <Pressable
-                    onPress={() => router.push("/(tabs)/profile")}
+                    onPress={() => {
+                      void Haptics.selectionAsync();
+                      router.push("/(tabs)/train");
+                    }}
                     style={[styles.emptyAction, { backgroundColor: t.primaryBg }]}
                   >
-                    <Text style={[styles.emptyActionText, { color: t.primaryText }]}>Create Split</Text>
+                    <Text style={[styles.emptyActionText, { color: t.primaryText }]}>Go to Train</Text>
                   </Pressable>
                 </View>
               ) : (
@@ -743,7 +991,11 @@ export default function NewExerciseScreen() {
                       <TouchableOpacity
                         key={split.id}
                         activeOpacity={0.85}
-                        onPress={() => setSelectedSplitId(split.id)}
+                        onPress={() => {
+                          void Haptics.selectionAsync();
+                          setSelectedSplitId(split.id);
+                          resetFeedback();
+                        }}
                         style={[
                           styles.splitChip,
                           selected
@@ -855,11 +1107,22 @@ export default function NewExerciseScreen() {
                       </Pressable>
                       <Pressable
                         onPress={handleRenameSlightly}
-                        style={[styles.inlineGhostButton, { borderColor: t.border, backgroundColor: t.background }]}
+                        style={[styles.inlineGhostButton, { borderColor: t.border, backgroundColor: screenPalette.base }]}
                       >
                         <Text style={[styles.inlineGhostButtonText, { color: t.text }]}>Rename slightly</Text>
                       </Pressable>
                     </View>
+                  </View>
+                </View>
+              ) : null}
+
+              {!duplicateMatch && primaryCrossSplitMatch ? (
+                <View style={[styles.softInfoBox, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+                  <Ionicons name="information-circle-outline" size={18} color={t.link} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.infoText, { color: t.text }]}>
+                      This name already exists in {splitNameById[primaryCrossSplitMatch.split_id ?? ""] ?? "another split"}. You can still add it here if it is part of this split too.
+                    </Text>
                   </View>
                 </View>
               ) : null}
@@ -989,7 +1252,7 @@ export default function NewExerciseScreen() {
             {nameFocused ? <View style={{ height: 20 }} /> : null}
           </ScrollView>
 
-          <View style={[styles.stickyFooter, { backgroundColor: t.background, borderTopColor: t.border }]}>
+          <View style={[styles.stickyFooter, { backgroundColor: screenPalette.footer, borderTopColor: t.border }]}>
             {!tourActive || tourStep !== "create_exercise" ? (
               <Pressable
                 disabled={!canSubmit || loading || splits.length === 0}
@@ -1044,6 +1307,32 @@ export default function NewExerciseScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
+    overflow: "hidden",
+  },
+  backgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  backgroundGlow: {
+    position: "absolute",
+    borderRadius: 999,
+  },
+  glowTop: {
+    width: 280,
+    height: 280,
+    top: -118,
+    right: -106,
+  },
+  glowMid: {
+    width: 230,
+    height: 230,
+    top: 260,
+    left: -124,
+  },
+  glowBottom: {
+    width: 310,
+    height: 310,
+    bottom: -150,
+    right: -136,
   },
   center: {
     flex: 1,
@@ -1081,8 +1370,13 @@ const styles = StyleSheet.create({
   },
   card: {
     borderWidth: 1,
-    borderRadius: 20,
+    borderRadius: 22,
     padding: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 7 },
+    elevation: 2,
   },
   sectionHeaderRow: {
     flexDirection: "row",
@@ -1185,6 +1479,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   infoBox: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  softInfoBox: {
     marginTop: 12,
     borderWidth: 1,
     borderRadius: 14,
@@ -1349,6 +1652,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     borderTopWidth: 1,
     paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: -6 },
     paddingTop: 12,
     paddingBottom: Platform.OS === "ios" ? 28 : 14,
     flexDirection: "row",
@@ -1383,4 +1690,5 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 });
+
 

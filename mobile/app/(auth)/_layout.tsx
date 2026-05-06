@@ -1,17 +1,32 @@
 "use client";
 
-import { Slot } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { StatusBar } from "react-native";
-import { useAppTheme } from "@/src/theme/theme";
+import { Stack } from "expo-router";
+import { StatusBar, StyleSheet, View } from "react-native";
+
+const AUTH_BG = "#050712";
 
 export default function AuthLayout() {
-  const t = useAppTheme();
-
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.background }}>
-      <StatusBar barStyle={t.primaryText === "#000000" ? "dark-content" : "light-content"} />
-      <Slot />
-    </SafeAreaView>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" backgroundColor={AUTH_BG} />
+
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: "fade",
+          animationDuration: 180,
+          contentStyle: {
+            backgroundColor: AUTH_BG,
+          },
+        }}
+      />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: AUTH_BG,
+  },
+});

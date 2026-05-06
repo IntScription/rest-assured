@@ -30,12 +30,42 @@ import {
   getCoachDisplayLabel,
   getCoachRuntimeMode,
 } from "@/src/features/coach/services/coach-runtime";
+import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
 
 type ThemeLike = ReturnType<typeof useAppTheme>;
+
+function isDarkHexColor(color?: string) {
+  if (!color?.startsWith("#")) return false;
+
+  const raw = color.replace("#", "");
+  const hex = raw.length === 3 ? raw.split("").map((ch) => ch + ch).join("") : raw;
+  const value = Number.parseInt(hex.slice(0, 6), 16);
+
+  if (Number.isNaN(value)) return false;
+
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+
+  return 0.299 * r + 0.587 * g + 0.114 * b < 150;
+}
+
+function getCoachScreenPalette(background: string) {
+  const isDark = isDarkHexColor(background);
+
+  return {
+    base: isDark ? "#06111F" : "#ECEFFF",
+    glowPrimary: isDark ? "rgba(99,102,241,0.21)" : "rgba(79,70,229,0.17)",
+    glowSecondary: isDark ? "rgba(34,197,94,0.15)" : "rgba(16,185,129,0.12)",
+    glowWarm: isDark ? "rgba(245,158,11,0.11)" : "rgba(245,158,11,0.11)",
+  };
+}
 
 export default function CoachScreen() {
   const t = useAppTheme();
   const router = useRouter();
+  const bottomPadding = useCustomTabBarBottomPadding(26);
+  const screenPalette = useMemo(() => getCoachScreenPalette(t.background), [t.background]);
   const [userId, setUserId] = useState<string | null>(null);
 
   const localCoach = useLocalCoach();
@@ -43,6 +73,141 @@ export default function CoachScreen() {
   const { loading: syncingHealth, syncNow, lastSnapshot } = useAppleHealthSync();
 
   const pulseAnim = useRef(new Animated.Value(0)).current;
+  const backgroundFloatA = useRef(new Animated.Value(0)).current;
+  const backgroundFloatB = useRef(new Animated.Value(0)).current;
+  const backgroundFloatC = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    backgroundFloatA.setValue(0);
+    backgroundFloatB.setValue(0);
+    backgroundFloatC.setValue(0);
+
+    const loops = [
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatA, {
+            toValue: 1,
+            duration: 19000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatA, {
+            toValue: 0,
+            duration: 19000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatB, {
+            toValue: 1,
+            duration: 23000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatB, {
+            toValue: 0,
+            duration: 23000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(backgroundFloatC, {
+            toValue: 1,
+            duration: 27000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(backgroundFloatC, {
+            toValue: 0,
+            duration: 27000,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+    ];
+
+    loops.forEach((loop) => loop.start());
+
+    return () => {
+      loops.forEach((loop) => loop.stop());
+    };
+  }, [backgroundFloatA, backgroundFloatB, backgroundFloatC]);
+
+  const coachGlowTopMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -18],
+        }),
+      },
+      {
+        translateY: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 20],
+        }),
+      },
+      {
+        scale: backgroundFloatA.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.055],
+        }),
+      },
+    ],
+  };
+
+  const coachGlowMidMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 22],
+        }),
+      },
+      {
+        translateY: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -20],
+        }),
+      },
+      {
+        scale: backgroundFloatB.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.045],
+        }),
+      },
+    ],
+  };
+
+  const coachGlowBottomMotion = {
+    transform: [
+      {
+        translateX: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -24],
+        }),
+      },
+      {
+        translateY: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -18],
+        }),
+      },
+      {
+        scale: backgroundFloatC.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.06],
+        }),
+      },
+    ],
+  };
 
   useEffect(() => {
     let active = true;
@@ -129,7 +294,7 @@ export default function CoachScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: screenPalette.base }]}>
         <ActivityIndicator size="large" color={t.text} />
       </SafeAreaView>
     );
@@ -140,10 +305,40 @@ export default function CoachScreen() {
   if (!onboardingDone) {
     return (
       <SafeAreaView
-        style={[styles.container, { backgroundColor: t.background }]}
+        style={[styles.container, { backgroundColor: screenPalette.base }]}
         edges={["top"]}
       >
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View pointerEvents="none" style={styles.backgroundLayer}>
+          <Animated.View
+            style={[
+              styles.backgroundGlow,
+              styles.coachGlowTop,
+              { backgroundColor: screenPalette.glowPrimary },
+              coachGlowTopMotion,
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.backgroundGlow,
+              styles.coachGlowMid,
+              { backgroundColor: screenPalette.glowSecondary },
+              coachGlowMidMotion,
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.backgroundGlow,
+              styles.coachGlowBottom,
+              { backgroundColor: screenPalette.glowWarm },
+              coachGlowBottomMotion,
+            ]}
+          />
+        </View>
+
+        <ScrollView
+          contentContainerStyle={[styles.content, { paddingBottom: bottomPadding }]}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.header}>
             <Text style={[styles.pageTitle, { color: t.text }]}>Coach</Text>
             <Text style={[styles.pageSubtitle, { color: t.mutedText }]}>
@@ -216,10 +411,40 @@ export default function CoachScreen() {
 
   return (
     <SafeAreaView
-      style={[styles.container, { backgroundColor: t.background }]}
+      style={[styles.container, { backgroundColor: screenPalette.base }]}
       edges={["top"]}
     >
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View pointerEvents="none" style={styles.backgroundLayer}>
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.coachGlowTop,
+            { backgroundColor: screenPalette.glowPrimary },
+            coachGlowTopMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.coachGlowMid,
+            { backgroundColor: screenPalette.glowSecondary },
+            coachGlowMidMotion,
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundGlow,
+            styles.coachGlowBottom,
+            { backgroundColor: screenPalette.glowWarm },
+            coachGlowBottomMotion,
+          ]}
+        />
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: bottomPadding }]}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
           <Text style={[styles.pageTitle, { color: t.text }]}>Coach</Text>
           <Text style={[styles.pageSubtitle, { color: t.mutedText }]}>
@@ -621,7 +846,35 @@ function formatCompact(value: number) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  backgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  backgroundGlow: {
+    position: "absolute",
+    borderRadius: 999,
+  },
+  coachGlowTop: {
+    width: 260,
+    height: 260,
+    top: -94,
+    right: -105,
+  },
+  coachGlowMid: {
+    width: 220,
+    height: 220,
+    top: 250,
+    left: -112,
+  },
+  coachGlowBottom: {
+    width: 280,
+    height: 280,
+    bottom: -148,
+    right: -128,
+  },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   content: {
     padding: 16,

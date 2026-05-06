@@ -1,15 +1,13 @@
-"use client";
-
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  ScrollView,
-  TouchableOpacity,
   ActivityIndicator,
   Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -17,30 +15,29 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { useAppleHealthSync } from "@/src/features/coach/health/useAppleHealthSync";
 import { saveCoachProfile } from "@/src/features/coach/api/saveCoachProfile";
 import { saveMeasurements } from "@/src/features/coach/api/saveMeasurements";
 import { generateCoachInsights } from "@/src/features/coach/api/generateCoachInsights";
 import { generateProgramDraft } from "@/src/features/coach/api/generateProgramDraft";
 import { generateAdjustmentSummary } from "@/src/features/coach/api/generateAdjustmentSummary";
 import { generateAiCoachSummary } from "@/src/features/coach/api/generateAiCoachSummary";
-import { useAppleHealthSync } from "@/src/features/coach/health/useAppleHealthSync";
 import CoachBackHeader from "@/src/features/coach/components/CoachBackHeader";
 
 const SEX_OPTIONS = [
   { label: "Male", value: "male" },
   { label: "Female", value: "female" },
   { label: "Other", value: "other" },
-  { label: "Prefer not to say", value: "prefer_not_to_say" },
 ] as const;
 
 const GOAL_OPTIONS = [
-  { label: "Fat loss", value: "fat_loss" },
-  { label: "Recomp", value: "recomp" },
   { label: "Hypertrophy", value: "hypertrophy" },
   { label: "Strength", value: "strength" },
   { label: "Skill", value: "skill" },
+  { label: "Fat loss", value: "fat_loss" },
   { label: "General fitness", value: "general_fitness" },
 ] as const;
+
 
 const TRAINING_STYLE_OPTIONS = [
   { label: "Calisthenics", value: "calisthenics" },
@@ -531,7 +528,7 @@ function SectionCard({
   title: string;
   icon: keyof typeof Ionicons.glyphMap;
   t: any;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <View

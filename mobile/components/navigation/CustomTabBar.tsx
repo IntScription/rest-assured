@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -12,12 +12,36 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { usePathname } from "expo-router";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/src/theme/theme";
+
+export const CUSTOM_TAB_BAR_COLLAPSED_HEIGHT = 66;
+export const CUSTOM_TAB_BAR_EXPANDED_HEIGHT = 72;
+export const CUSTOM_TAB_BAR_END_GAP = 14;
+
+const EXPANDED_AUTO_COLLAPSE_MS = 3600;
+
+function getBottomDockInset(bottomInset: number) {
+  if (Platform.OS === "ios") return Math.max(bottomInset - 14, 8);
+  if (Platform.OS === "android") return Math.max(bottomInset, 8);
+  return 8;
+}
+
+export function useCustomTabBarBottomPadding(extra = 26) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    getBottomDockInset(insets.bottom) +
+    CUSTOM_TAB_BAR_COLLAPSED_HEIGHT +
+    CUSTOM_TAB_BAR_END_GAP +
+    extra
+  );
+}
 
 type TabConfig = {
   label: string;
@@ -222,7 +246,8 @@ function CompactTabButton({
         },
       ]}
     >
-      <Ionicons name={getFocusedIcon(icon)} size={18} color={textColor} />
+      <Ionicons name={getFocusedIcon(icon)} size={17} color={textColor} />
+
       <Text
         numberOfLines={1}
         style={[styles.compactTabLabel, { color: textColor }]}
@@ -293,6 +318,7 @@ function TimerCardLayout({
                 ]}
               />
             )}
+
             <View
               style={[
                 styles.timerDot,
@@ -310,6 +336,7 @@ function TimerCardLayout({
             >
               {title}
             </Text>
+
             <Text
               numberOfLines={1}
               style={[styles.utilityTime, { color: textColor }]}
@@ -379,9 +406,10 @@ function UtilityTimerCard({
           >
             <Ionicons
               name={isRunning ? "pause" : "play"}
-              size={14}
+              size={13}
               color={textColor}
             />
+
             <Text style={[styles.timerActionText, { color: textColor }]}>
               {isRunning ? "Stop" : "Start"}
             </Text>
@@ -400,7 +428,7 @@ function UtilityTimerCard({
               },
             ]}
           >
-            <Ionicons name="refresh" size={15} color={mutedColor} />
+            <Ionicons name="refresh" size={14} color={mutedColor} />
           </Pressable>
         </>
       }
@@ -504,7 +532,8 @@ function RestTimerCard({
               },
             ]}
           >
-            <Ionicons name="options-outline" size={14} color={textColor} />
+            <Ionicons name="options-outline" size={13} color={textColor} />
+
             <Text style={[styles.timerActionText, { color: textColor }]}>
               Set
             </Text>
@@ -523,7 +552,7 @@ function RestTimerCard({
               },
             ]}
           >
-            <Ionicons name="refresh" size={15} color={mutedColor} />
+            <Ionicons name="refresh" size={14} color={mutedColor} />
           </Pressable>
         </>
       }
@@ -614,7 +643,8 @@ function ExpandedTabButton({
       ]}
     >
       <View style={styles.expandedTabInner}>
-        <Ionicons name={finalIcon} size={17} color={color} />
+        <Ionicons name={finalIcon} size={16} color={color} />
+
         <Text numberOfLines={1} style={[styles.expandedTabLabel, { color }]}>
           {label}
         </Text>
@@ -711,13 +741,30 @@ function StepperPicker({
   );
 }
 
-export default function CustomTabBar({
+export default function CustomTabBar(props: BottomTabBarProps) {
+  const pathname = usePathname();
+
+  const shouldHideTabBar =
+    pathname.startsWith("/coach/onboarding") ||
+    pathname.startsWith("/coach/measurements") ||
+    pathname.startsWith("/coach/recovery") ||
+    pathname.startsWith("/coach/ask") ||
+    pathname.startsWith("/skills/");
+
+  if (shouldHideTabBar) return null;
+
+  return <CustomTabBarInner {...props} />;
+}
+
+function CustomTabBarInner({
   state,
   navigation,
 }: BottomTabBarProps) {
   const t = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+
+  const bottomDockInset = getBottomDockInset(insets.bottom);
 
   const palette = useMemo(() => getPalette(t.background), [t.background]);
 
@@ -757,7 +804,12 @@ export default function CustomTabBar({
   const expandedScrollRef = useRef<ScrollView>(null);
   const utilityPagerRef = useRef<ScrollView>(null);
   const hasMountedRestRef = useRef(false);
+
   const restDoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
+
+  const expandedCollapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
 
@@ -765,6 +817,7 @@ export default function CustomTabBar({
   const collapsedOpacity = useRef(new Animated.Value(1)).current;
   const expandedOpacity = useRef(new Animated.Value(0)).current;
   const expandedTranslate = useRef(new Animated.Value(6)).current;
+  const dockPressAnim = useRef(new Animated.Value(0)).current;
   const pickerScale = useRef(new Animated.Value(0.94)).current;
   const pickerOpacity = useRef(new Animated.Value(0)).current;
 
@@ -772,9 +825,9 @@ export default function CustomTabBar({
   const restPulseAnim = useRef(new Animated.Value(0)).current;
 
   const shellHorizontalPadding = 12;
-  const outerHorizontalInset = 8;
-  const collapsedGap = 8;
-  const expandedGap = 8;
+  const outerHorizontalInset = 7;
+  const collapsedGap = 7;
+  const expandedGap = 7;
   const visibleTabs = 4;
 
   const barInnerWidth = Math.max(
@@ -782,7 +835,8 @@ export default function CustomTabBar({
     width - shellHorizontalPadding * 2 - outerHorizontalInset * 2
   );
 
-  const currentTabWidth = 118;
+  const currentTabWidth = width < 380 ? 98 : 108;
+
   const utilityAreaWidth = Math.max(
     0,
     barInnerWidth - currentTabWidth - collapsedGap
@@ -808,6 +862,54 @@ export default function CustomTabBar({
       restDoneIntervalRef.current = null;
     }
   };
+
+  const clearExpandedAutoCollapse = useCallback(() => {
+    if (expandedCollapseTimeoutRef.current) {
+      clearTimeout(expandedCollapseTimeoutRef.current);
+      expandedCollapseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleExpandedAutoCollapse = useCallback(() => {
+    clearExpandedAutoCollapse();
+
+    expandedCollapseTimeoutRef.current = setTimeout(() => {
+      setExpanded(false);
+    }, EXPANDED_AUTO_COLLAPSE_MS);
+  }, [clearExpandedAutoCollapse]);
+
+  const triggerDockPressFeel = useCallback(() => {
+    dockPressAnim.stopAnimation();
+    dockPressAnim.setValue(0);
+
+    Animated.sequence([
+      Animated.spring(dockPressAnim, {
+        toValue: 1,
+        damping: 11,
+        stiffness: 280,
+        mass: 0.45,
+        useNativeDriver: false,
+      }),
+      Animated.spring(dockPressAnim, {
+        toValue: 0,
+        damping: 14,
+        stiffness: 240,
+        mass: 0.55,
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [dockPressAnim]);
+
+  useEffect(() => {
+    if (!expanded) {
+      clearExpandedAutoCollapse();
+      return;
+    }
+
+    scheduleExpandedAutoCollapse();
+
+    return clearExpandedAutoCollapse;
+  }, [expanded, clearExpandedAutoCollapse, scheduleExpandedAutoCollapse]);
 
   useEffect(() => {
     if (expanded) {
@@ -1034,8 +1136,9 @@ export default function CustomTabBar({
   useEffect(() => {
     return () => {
       stopRestDoneHaptics();
+      clearExpandedAutoCollapse();
     };
-  }, []);
+  }, [clearExpandedAutoCollapse]);
 
   const handleWorkoutToggle = async () => {
     await lightTap();
@@ -1088,6 +1191,16 @@ export default function CustomTabBar({
     setRestPickerVisible(false);
   };
 
+  const handleExpandedInteractionStart = () => {
+    if (!expanded) return;
+    clearExpandedAutoCollapse();
+  };
+
+  const handleExpandedInteractionEnd = () => {
+    if (!expanded) return;
+    scheduleExpandedAutoCollapse();
+  };
+
   const handleTabPress = async (routeName: string, isFocused: boolean) => {
     const normalizedTarget = normalizeRouteName(routeName);
     const route = state.routes.find(
@@ -1106,32 +1219,60 @@ export default function CustomTabBar({
 
     if (isFocused) {
       await lightTap();
-      setExpanded((prev) => !prev);
+      triggerDockPressFeel();
+
+      setExpanded((prev) => {
+        const next = !prev;
+
+        if (!next) {
+          clearExpandedAutoCollapse();
+        }
+
+        return next;
+      });
+
       return;
     }
 
     await softImpact();
+    clearExpandedAutoCollapse();
     setExpanded(false);
     navigation.navigate(normalizedTarget as never);
   };
 
   const animatedHeight = containerAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [72, 80],
+    outputRange: [
+      CUSTOM_TAB_BAR_COLLAPSED_HEIGHT,
+      CUSTOM_TAB_BAR_EXPANDED_HEIGHT,
+    ],
   });
 
   const animatedRadius = containerAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [28, 30],
+    outputRange: [25, 27],
   });
+
+  const dockPressScale = dockPressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.018],
+  });
+
+  const dockPressLift = dockPressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -1.5],
+  });
+
 
   return (
     <>
+
       <Animated.View
+        pointerEvents="box-none"
         style={[
           styles.shell,
           {
-            paddingBottom: Math.max(insets.bottom, 10),
+            paddingBottom: bottomDockInset,
           },
         ]}
       >
@@ -1144,6 +1285,10 @@ export default function CustomTabBar({
               backgroundColor: palette.shellBg,
               borderColor: palette.shellBorder,
               shadowColor: "#000",
+              transform: [
+                { translateY: dockPressLift },
+                { scale: dockPressScale },
+              ],
             },
           ]}
         >
@@ -1258,6 +1403,12 @@ export default function CustomTabBar({
               }
               disableIntervalMomentum={!shouldScrollExpanded}
               snapToAlignment="start"
+              onTouchStart={handleExpandedInteractionStart}
+              onTouchEnd={handleExpandedInteractionEnd}
+              onTouchCancel={handleExpandedInteractionEnd}
+              onScrollBeginDrag={handleExpandedInteractionStart}
+              onScrollEndDrag={handleExpandedInteractionEnd}
+              onMomentumScrollEnd={handleExpandedInteractionEnd}
               contentContainerStyle={[
                 styles.tabsScrollContent,
                 {
@@ -1308,6 +1459,8 @@ export default function CustomTabBar({
             styles.modalBackdrop,
             {
               backgroundColor: palette.modalScrim,
+              paddingBottom:
+                bottomDockInset + CUSTOM_TAB_BAR_COLLAPSED_HEIGHT + 12,
             },
           ]}
           onPress={handleCancelRestPicker}
@@ -1344,6 +1497,7 @@ export default function CustomTabBar({
                   <Text style={[styles.compactPickerTitle, { color: t.text }]}>
                     Rest
                   </Text>
+
                   <Text
                     style={[styles.compactPickerSubtitle, { color: t.mutedText }]}
                   >
@@ -1421,6 +1575,7 @@ export default function CustomTabBar({
                   ]}
                 >
                   <Ionicons name="play" size={14} color={t.text} />
+
                   <Text
                     style={[styles.compactPickerButtonText, { color: t.text }]}
                   >
@@ -1437,9 +1592,16 @@ export default function CustomTabBar({
 }
 
 const styles = StyleSheet.create({
+
   shell: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 999,
+    elevation: 999,
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 4,
     backgroundColor: "transparent",
   },
 
@@ -1447,16 +1609,16 @@ const styles = StyleSheet.create({
     position: "relative",
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
     ...Platform.select({
       ios: {
-        shadowOpacity: 0.14,
-        shadowRadius: 22,
-        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.13,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 8 },
       },
       android: {
-        elevation: 16,
+        elevation: 14,
       },
     }),
   },
@@ -1470,15 +1632,15 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 7,
   },
 
   expandedLayer: {
     ...StyleSheet.absoluteFillObject,
-    top: 8,
-    left: 8,
-    right: 8,
-    bottom: 8,
+    top: 7,
+    left: 7,
+    right: 7,
+    bottom: 7,
     justifyContent: "center",
   },
 
@@ -1490,59 +1652,59 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     overflow: "hidden",
-    borderRadius: 20,
+    borderRadius: 18,
   },
 
   utilityPagerContent: {
     alignItems: "center",
-    paddingHorizontal: 4,
+    paddingHorizontal: 3,
   },
 
   utilityPage: {
     justifyContent: "center",
-    paddingHorizontal: 4,
+    paddingHorizontal: 3,
   },
 
   compactTabButton: {
-    minHeight: 54,
-    borderRadius: 20,
+    minHeight: 50,
+    borderRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    gap: 6,
   },
 
   compactTabLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "700",
     letterSpacing: -0.15,
     textAlign: "center",
   },
 
   timerCard: {
-    minHeight: 54,
-    borderRadius: 20,
+    minHeight: 50,
+    borderRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingVertical: 8,
     justifyContent: "center",
   },
 
   cardTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    marginTop: 1,
+    gap: 7,
+    marginTop: 0,
   },
 
   utilityLeft: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 7,
     flex: 1,
     minWidth: 0,
   },
@@ -1556,21 +1718,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
     letterSpacing: -0.05,
-    marginBottom: 1,
+    marginBottom: 0,
   },
 
   utilityTime: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: "800",
     letterSpacing: -0.2,
   },
 
   progressTrack: {
-    height: 6,
+    height: 5,
     borderRadius: 999,
     overflow: "hidden",
     borderWidth: 1,
-    marginTop: 8,
+    marginTop: 6,
   },
 
   progressGlow: {
@@ -1586,54 +1748,54 @@ const styles = StyleSheet.create({
   },
 
   dotWrap: {
-    width: 12,
-    height: 12,
+    width: 11,
+    height: 11,
     alignItems: "center",
     justifyContent: "center",
   },
 
   timerDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 999,
   },
 
   timerDotPulse: {
     position: "absolute",
-    width: 12,
-    height: 12,
+    width: 11,
+    height: 11,
     borderRadius: 999,
   },
 
   utilityActions: {
-    minWidth: 88,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-
-  timerActionButton: {
-    minHeight: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    paddingHorizontal: 10,
+    minWidth: 82,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 5,
   },
 
+  timerActionButton: {
+    minHeight: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+
   timerActionText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
     letterSpacing: -0.1,
   },
 
   resetButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
@@ -1645,11 +1807,11 @@ const styles = StyleSheet.create({
 
   expandedTabButton: {
     width: "100%",
-    minHeight: 54,
-    borderRadius: 20,
+    minHeight: 48,
+    borderRadius: 17,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1657,11 +1819,11 @@ const styles = StyleSheet.create({
   expandedTabInner: {
     alignItems: "center",
     justifyContent: "center",
-    gap: 5,
+    gap: 4,
   },
 
   expandedTabLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
     letterSpacing: -0.1,
     textAlign: "center",
@@ -1671,7 +1833,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "flex-end",
     paddingHorizontal: 18,
-    paddingBottom: 108,
   },
 
   compactPickerCard: {

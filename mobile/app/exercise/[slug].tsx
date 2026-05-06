@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,14 +12,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  Dimensions,
+  Animated,
+  Easing,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { format, isToday, isYesterday } from "date-fns";
+import { format } from "date-fns";
+
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
 import { useIsOnline } from "@/hooks/use-is-online";
@@ -31,547 +33,304 @@ import {
   setOnboardingStep,
 } from "@/src/lib/onboarding";
 
-type ExerciseRow = {
-  id: string;
-  name: string;
-  slug: string | null;
-  split_id?: string | null;
+import ExerciseBackground from "@/src/features/exercise/components/ExerciseBackground";
+import ExerciseHeader from "@/src/features/exercise/components/ExerciseHeader";
+import TrainingSummaryDeck from "@/src/features/exercise/components/TrainingSummaryDeck";
+import QuickLoggerCard from "@/src/features/exercise/components/QuickLoggerCard";
+import {
+  APPROX_LOG_CARD_HEIGHT,
+  DASHBOARD_CELL_WIDTH,
+  DASHBOARD_GAP,
+  EXERCISE_BACKGROUND,
+  EXERCISE_BUBBLES,
+  PR_COLORS,
+} from "@/src/features/exercise/constants";
+import type {
+  ExerciseCacheShape,
+  ExercisePrefs,
+  ExerciseRow,
+  LogFilter,
+  LogMarkers,
+  LogRow,
+  LogTag,
+  PendingLogPayload,
+  RecordShortcut,
+  SessionSummary,
+  SplitRowLite,
+  SuggestionAction,
+  TrendMetric,
+  TrendView,
+  TutPreviewRow,
+} from "@/src/features/exercise/types";
+import {
+  addInteger,
+  addWeight,
+  calculateVolume,
+  formatCompactWeight,
+  formatComparableLine,
+  formatDurationLabel,
+  formatLogDate,
+  formatLogLine,
+  formatWeightLabel,
+  getApproxScrollOffsetForIndex,
+  getLogTag,
+  getLogTagLabel,
+  getMonthLabel,
+  getValidationError,
+  isDarkColor,
+  matchesSearch,
+  sanitizeDecimalInput,
+  sanitizeIntegerInput,
+} from "@/src/features/exercise/utils/formatters";
+import { getCoachNextSetInsight } from "@/src/features/exercise/utils/coachNextSetInsight";
+import {
+  getCurrentPrOwners,
+  getLogAchievement,
+  getPrBoardItems,
+  getPrFlags,
+  getTodayLogIds,
+} from "@/src/features/exercise/utils/prLogic";
+import {
+  getProgressInsight,
+  getTrendCallouts,
+} from "@/src/features/exercise/utils/trendLogic";
+
+type LogListCardProps = {
+  item: LogRow;
+  showMonthHeader: boolean;
+  currentMonth: string;
+  monthCollapsed: boolean;
+  noteExpanded: boolean;
+  markers: LogMarkers;
+  leftAccentColor: string;
+  t: ReturnType<typeof useAppTheme>;
+  onToggleMonth: (month: string) => void;
+  onDuplicate: (log: LogRow) => void;
+  onEdit: (log: LogRow) => void;
+  onDelete: (id: string) => void;
+  onToggleNote: (id: string) => void;
 };
 
-type SplitRowLite = {
-  id: string;
-  name: string;
-};
-
-type TutPreviewRow = {
-  id: string;
-  tut_seconds: number;
-  performed_on: string;
-};
-
-type LogTag = "working" | "warmup" | "topset";
-type LogFilter = "all" | "working" | "warmup" | "topset";
-type TrendMetric = "volume" | "weight" | "reps";
-type TrendView = "graph" | "list";
-
-type LogRow = {
-  id: string;
-  user_id: string;
-  exercise_id: string;
-  weight: number | null;
-  reps: number;
-  sets: number;
-  volume: number | null;
-  created_at: string | null;
-  day?: string | null;
-  type?: string | null;
-  pending?: boolean;
-  local_temp_id?: string;
-};
-
-type ExerciseCacheShape = {
-  exercise: ExerciseRow | null;
-  logs: LogRow[];
-  splitName?: string | null;
-};
-
-type PendingLogPayload = {
-  local_temp_id: string;
-  weight: number;
-  reps: number;
-  sets: number;
-  volume: number;
-  day: string | null;
-  type: LogTag;
-  created_at: string;
-};
-
-type ExercisePrefs = {
-  defaultTag: LogTag;
-  restDuration: number;
-  trendMetric: TrendMetric;
-  trendView: TrendView;
-  weightJump: number;
-};
-
-type SessionSummary = {
-  logs: number;
-  volume: number;
-  heaviest: number;
-  bestSet: string;
-};
-
-type PrFlags = {
-  heaviest: boolean;
-  volume: boolean;
-  reps: boolean;
-};
-
-type CurrentPrOwners = {
-  heaviestId: string | null;
-  volumeId: string | null;
-  repsId: string | null;
-};
-
-type CompareInsightTone = "up" | "same" | "down" | "neutral";
-
-type CompareInsight = {
-  tone: CompareInsightTone;
-  title: string;
-  details: string[];
-};
-
-type RecordShortcut = {
-  key: string;
-  label: string;
-  value: string;
-  logId: string | null;
-  accent: string;
-};
-
-type SuggestionAction = {
-  id: string;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  apply: () => void;
-};
-
-type LogMarkers = {
-  isCurrentHeaviest: boolean;
-  isCurrentVolume: boolean;
-  isCurrentRep: boolean;
-  isPreviousHeaviest: boolean;
-  isPreviousVolume: boolean;
-  isPreviousRep: boolean;
-  isTodayHeaviest: boolean;
-  isTodayVolume: boolean;
-  isSessionBest: boolean;
-  hasAnyPr: boolean;
-};
-
-const SCREEN_WIDTH = Dimensions.get("window").width;
-const DASHBOARD_GAP = 10;
-const DASHBOARD_CELL_WIDTH = (SCREEN_WIDTH - 32 - 28 - DASHBOARD_GAP) / 2;
-const REST_PRESETS = [45, 60, 90, 120, 150, 180, 240, 300];
-const APPROX_LOG_CARD_HEIGHT = 170;
-const APPROX_MONTH_HEADER_HEIGHT = 30;
-
-const PR_COLORS = {
-  heaviest: "#F59E0B",
-  volume: "#8B5CF6",
-  reps: "#2563EB",
-  recent: "#10B981",
-};
-
-
-function formatWeightLabel(weight: number | null | undefined) {
-  const value = Number(weight ?? 0);
-  if (!Number.isFinite(value) || value <= 0) return "Bodyweight";
-  if (Number.isInteger(value)) return `${value} kg`;
-  return `${value.toFixed(1)} kg`;
-}
-
-function formatCompactWeight(weight: number | null | undefined) {
-  const value = Number(weight ?? 0);
-  if (!Number.isFinite(value) || value <= 0) return "BW";
-  if (Number.isInteger(value)) return `${value} kg`;
-  return `${value.toFixed(1)} kg`;
-}
-
-function formatLogLine(log: Pick<LogRow, "weight" | "reps" | "sets">) {
-  const weightValue = Number(log.weight ?? 0);
-  const weightText = weightValue > 0 ? `${formatWeightLabel(weightValue)} × ` : "Bodyweight × ";
-  return `${weightText}${log.reps} × ${log.sets} sets`;
-}
-
-function formatComparableLine(log: Pick<LogRow, "weight" | "reps" | "sets">) {
-  return `${formatCompactWeight(log.weight)} · ${log.reps}×${log.sets}`;
-}
-
-function formatLogDate(value: string | null | undefined) {
-  if (!value) return "Unknown date";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown date";
-  if (isToday(date)) return `Today · ${format(date, "p")}`;
-  if (isYesterday(date)) return `Yesterday · ${format(date, "p")}`;
-  return format(date, "MMM d, yyyy · p");
-}
-
-function formatDurationLabel(seconds: number | null | undefined) {
-  const value = Number(seconds ?? 0);
-  if (!Number.isFinite(value) || value <= 0) return "—";
-  if (value < 60) return `${value}s`;
-  const mins = Math.floor(value / 60);
-  const secs = value % 60;
-  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-}
-
-function sanitizeDecimalInput(value: string) {
-  const cleaned = value.replace(/,/g, ".").replace(/[^0-9.]/g, "");
-  const parts = cleaned.split(".");
-  if (parts.length <= 2) return cleaned;
-  return `${parts[0]}.${parts.slice(1).join("")}`;
-}
-
-function sanitizeIntegerInput(value: string) {
-  return value.replace(/[^0-9]/g, "");
-}
-
-function calculateVolume(weight: string, reps: string, sets: string) {
-  const w = parseFloat(weight) || 0;
-  const r = parseInt(reps, 10) || 0;
-  const s = parseInt(sets, 10) || 0;
-  return Math.max(1, w) * r * s;
-}
-
-function getValidationError(weight: string, reps: string, sets: string) {
-  const parsedWeight = parseFloat(weight || "0");
-  const parsedReps = parseInt(reps || "0", 10);
-  const parsedSets = parseInt(sets || "0", 10);
-
-  if (!reps.trim()) return "Reps are required.";
-  if (!sets.trim()) return "Sets are required.";
-  if (Number.isNaN(parsedWeight) || parsedWeight < 0) return "Weight cannot be negative.";
-  if (Number.isNaN(parsedReps) || parsedReps < 1) return "Reps must be at least 1.";
-  if (Number.isNaN(parsedSets) || parsedSets < 1) return "Sets must be at least 1.";
-  if (parsedReps > 999) return "Reps are too high.";
-  if (parsedSets > 999) return "Sets are too high.";
-  if (parsedWeight > 9999) return "Weight is too high.";
-  return "";
-}
-
-function addWeight(current: string, delta: number) {
-  const base = parseFloat(current || "0") || 0;
-  const next = Math.max(0, base + delta);
-  if (Number.isInteger(next)) return String(next);
-  return next.toFixed(1);
-}
-
-function addInteger(current: string, delta: number) {
-  const base = parseInt(current || "0", 10) || 0;
-  return String(Math.max(0, base + delta));
-}
-
-function getLogTag(log: Pick<LogRow, "type">): LogTag {
-  if (log.type === "warmup" || log.type === "topset") return log.type;
-  return "working";
-}
-
-function getLogTagLabel(tag: LogTag) {
-  if (tag === "warmup") return "Warm-up";
-  if (tag === "topset") return "Top Set";
-  return "Working";
-}
-
-function getMonthLabel(value: string | null | undefined) {
-  if (!value) return "Unknown";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown";
-  return format(date, "MMMM yyyy");
-}
-
-function matchesSearch(log: LogRow, query: string) {
-  if (!query.trim()) return true;
-  const q = query.toLowerCase().trim();
-  const tag = getLogTagLabel(getLogTag(log)).toLowerCase();
-  const date = formatLogDate(log.created_at).toLowerCase();
-  const note = (log.day ?? "").toLowerCase();
-  const line = formatLogLine(log).toLowerCase();
-  return tag.includes(q) || date.includes(q) || note.includes(q) || line.includes(q);
-}
-
-function getComparableLogs(logs: LogRow[], currentTag: LogTag, reps: number) {
-  const sameTagLogs = logs.filter((log) => getLogTag(log) === currentTag);
-  const closeRepLogs = sameTagLogs.filter((log) => Math.abs(Number(log.reps ?? 0) - reps) <= 1);
-  return closeRepLogs.length > 0 ? closeRepLogs : sameTagLogs;
-}
-
-function getTrendMetricValue(log: LogRow, metric: TrendMetric) {
-  if (metric === "weight") return Number(log.weight ?? 0);
-  if (metric === "reps") return Number(log.reps ?? 0);
-  return Number(log.volume ?? 0);
-}
-
-function formatTrendMetricValue(metric: TrendMetric, value: number) {
-  if (metric === "weight") return formatCompactWeight(value);
-  if (metric === "reps") return `${value} reps`;
-  return `${value}`;
-}
-
-function getLogAchievement(
-  nextLog: Pick<LogRow, "weight" | "reps" | "sets" | "volume" | "type">,
-  previousLogs: LogRow[]
-) {
-  const tag = getLogTag(nextLog);
-  const weight = Number(nextLog.weight ?? 0);
-  const reps = Number(nextLog.reps ?? 0);
-  const volume = Number(nextLog.volume ?? 0);
-
-  const workingLogs = previousLogs.filter((log) => getLogTag(log) !== "warmup");
-  const sameCategoryLogs =
-    tag === "warmup" ? previousLogs.filter((log) => getLogTag(log) === "warmup") : workingLogs;
-
-  const heaviest = Math.max(0, ...sameCategoryLogs.map((log) => Number(log.weight ?? 0)));
-  const bestVolume = Math.max(0, ...sameCategoryLogs.map((log) => Number(log.volume ?? 0)));
-  const bestBodyweightReps = Math.max(
-    0,
-    ...sameCategoryLogs.filter((log) => Number(log.weight ?? 0) <= 0).map((log) => Number(log.reps ?? 0))
+function sameMarkers(a: LogMarkers, b: LogMarkers) {
+  return (
+    a.isCurrentHeaviest === b.isCurrentHeaviest &&
+    a.isCurrentVolume === b.isCurrentVolume &&
+    a.isCurrentRep === b.isCurrentRep &&
+    a.isPreviousHeaviest === b.isPreviousHeaviest &&
+    a.isPreviousVolume === b.isPreviousVolume &&
+    a.isPreviousRep === b.isPreviousRep &&
+    a.isTodayHeaviest === b.isTodayHeaviest &&
+    a.isTodayVolume === b.isTodayVolume &&
+    a.isSessionBest === b.isSessionBest &&
+    a.hasAnyPr === b.hasAnyPr
   );
-
-  if (weight > heaviest) return "New heaviest PR";
-  if (volume > bestVolume) return "New volume PR";
-  if (weight <= 0 && reps > bestBodyweightReps) return "New bodyweight rep PR";
-  if (previousLogs.length === 0) return "First log saved";
-  if (tag === "topset") return "Top set logged";
-  return "Log saved";
 }
 
-function getPrFlags(logs: LogRow[]) {
-  const flags: Record<string, PrFlags> = {};
-  let heaviest = 0;
-  let bestVolume = 0;
-  let bestBodyweightReps = 0;
-
-  [...logs].reverse().forEach((log) => {
-    const weight = Number(log.weight ?? 0);
-    const volume = Number(log.volume ?? 0);
-    const reps = Number(log.reps ?? 0);
-
-    const current: PrFlags = {
-      heaviest: false,
-      volume: false,
-      reps: false,
-    };
-
-    if (weight > heaviest) {
-      current.heaviest = true;
-      heaviest = weight;
-    }
-    if (volume > bestVolume) {
-      current.volume = true;
-      bestVolume = volume;
-    }
-    if (weight <= 0 && reps > bestBodyweightReps) {
-      current.reps = true;
-      bestBodyweightReps = reps;
-    }
-
-    flags[log.id] = current;
-  });
-
-  return flags;
+function sameTheme(a: ReturnType<typeof useAppTheme>, b: ReturnType<typeof useAppTheme>) {
+  return (
+    a.card === b.card &&
+    a.cardAlt === b.cardAlt &&
+    a.border === b.border &&
+    a.text === b.text &&
+    a.mutedText === b.mutedText &&
+    a.link === b.link &&
+    a.secondaryBg === b.secondaryBg &&
+    a.secondaryText === b.secondaryText &&
+    a.danger === b.danger
+  );
 }
 
+const LogListCard = memo(function LogListCard({
+  item,
+  showMonthHeader,
+  currentMonth,
+  monthCollapsed,
+  noteExpanded,
+  markers,
+  leftAccentColor,
+  t,
+  onToggleMonth,
+  onDuplicate,
+  onEdit,
+  onDelete,
+  onToggleNote,
+}: LogListCardProps) {
+  return (
+    <>
+      {showMonthHeader ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => onToggleMonth(currentMonth)}
+          style={styles.monthHeaderWrap}
+        >
+          <Text style={[styles.monthHeaderText, { color: t.mutedText }]}>
+            {currentMonth} {monthCollapsed ? "· Tap to expand" : "· Tap to collapse"}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
-function getCurrentPrOwners(logs: LogRow[]): CurrentPrOwners {
-  let heaviestId: string | null = null;
-  let volumeId: string | null = null;
-  let repsId: string | null = null;
-  let heaviest = -1;
-  let bestVolume = -1;
-  let bestBodyweightReps = -1;
+      <TouchableOpacity
+        activeOpacity={0.92}
+        onLongPress={() => onDuplicate(item)}
+        style={[
+          styles.logCard,
+          {
+            backgroundColor: t.card,
+            borderColor: markers.hasAnyPr ? leftAccentColor : t.border,
+            shadowColor: leftAccentColor,
+          },
+          markers.hasAnyPr && styles.logCardPr,
+        ]}
+      >
+        <View
+          style={[
+            styles.logPrRail,
+            { backgroundColor: markers.hasAnyPr ? leftAccentColor : "transparent" },
+          ]}
+        />
 
-  for (const log of logs) {
-    const weight = Number(log.weight ?? 0);
-    const volume = Number(log.volume ?? 0);
-    const reps = Number(log.reps ?? 0);
+        <View style={styles.logLeft}>
+          <View style={styles.logTitleRow}>
+            {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
+              <Ionicons
+                name={markers.hasAnyPr ? "trophy-outline" : "flash-outline"}
+                size={16}
+                color={markers.hasAnyPr ? leftAccentColor : t.text}
+              />
+            ) : null}
+            <Text style={[styles.logText, { color: t.text }]}>{formatLogLine(item)}</Text>
+          </View>
 
-    if (weight > heaviest) {
-      heaviest = weight;
-      heaviestId = log.id;
-    }
-    if (volume > bestVolume) {
-      bestVolume = volume;
-      volumeId = log.id;
-    }
-    if (weight <= 0 && reps > bestBodyweightReps) {
-      bestBodyweightReps = reps;
-      repsId = log.id;
-    }
-  }
+          <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(item.created_at)}</Text>
+          <View style={styles.logMetaRow}>
+            <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+              <Text style={[styles.logMetaChipText, { color: t.text }]}>
+                {getLogTagLabel(getLogTag(item))}
+              </Text>
+            </View>
 
-  return { heaviestId, volumeId, repsId };
-}
+            <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+              <Text style={[styles.logMetaChipText, { color: t.text }]}>
+                Vol {Number(item.volume ?? 0)}
+              </Text>
+            </View>
 
-function getTodayLogIds(logs: LogRow[]) {
-  return logs.filter((log) => {
-    if (!log.created_at) return false;
-    const d = new Date(log.created_at);
-    return !Number.isNaN(d.getTime()) && isToday(d);
-  });
-}
+            <View style={styles.logIndicatorRow}>
+              {markers.isCurrentHeaviest || markers.isPreviousHeaviest ? (
+                <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.heaviest }]} />
+              ) : null}
+              {markers.isCurrentVolume || markers.isPreviousVolume ? (
+                <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.volume }]} />
+              ) : null}
+              {markers.isCurrentRep || markers.isPreviousRep ? (
+                <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.reps }]} />
+              ) : null}
+              {markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume ? (
+                <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.recent }]} />
+              ) : null}
+            </View>
 
-function getApproxScrollOffsetForIndex(logs: LogRow[], index: number) {
-  if (index <= 0) return 0;
-  let monthHeaders = 0;
-  for (let i = 0; i <= index; i += 1) {
-    const current = getMonthLabel(logs[i]?.created_at);
-    const prev = i > 0 ? getMonthLabel(logs[i - 1]?.created_at) : null;
-    if (i === 0 || current !== prev) monthHeaders += 1;
-  }
-  return index * APPROX_LOG_CARD_HEIGHT + monthHeaders * APPROX_MONTH_HEADER_HEIGHT;
-}
+            {item.pending ? (
+              <View style={[styles.pendingChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+                <Text style={[styles.pendingChipText, { color: t.mutedText }]}>Pending</Text>
+              </View>
+            ) : null}
+          </View>
 
-function getProgressInsight(
-  weightText: string,
-  repsText: string,
-  setsText: string,
-  logs: LogRow[],
-  currentTag: LogTag
-): CompareInsight {
-  const currentWeight = parseFloat(weightText) || 0;
-  const currentReps = parseInt(repsText, 10) || 0;
-  const currentSets = parseInt(setsText, 10) || 0;
+          {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
+            <Text style={[styles.logIndicatorHint, { color: t.mutedText }]}>
+              {markers.isCurrentHeaviest
+                ? "Current heaviest PR"
+                : markers.isCurrentVolume
+                  ? "Current volume PR"
+                  : markers.isCurrentRep
+                    ? "Current bodyweight rep PR"
+                    : markers.isSessionBest
+                      ? "Session best"
+                      : markers.isTodayHeaviest
+                        ? "Today’s heaviest"
+                        : markers.isTodayVolume
+                          ? "Today’s highest volume"
+                          : markers.isPreviousHeaviest || markers.isPreviousVolume || markers.isPreviousRep
+                            ? "Previous PR milestone"
+                            : ""}
+            </Text>
+          ) : null}
 
-  if (!currentReps || !currentSets) {
-    return {
-      tone: "neutral",
-      title: "Fill reps and sets to compare against your history.",
-      details: [],
-    };
-  }
+          {item.day ? (
+            <>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => onToggleNote(item.id)}
+              >
+                <Text style={[styles.noteToggleText, { color: t.link }]}>
+                  {noteExpanded ? "Hide note" : "Show note"}
+                </Text>
+              </TouchableOpacity>
 
-  const comparableLogs = getComparableLogs(logs, currentTag, currentReps);
-  if (comparableLogs.length === 0) {
-    return {
-      tone: "neutral",
-      title: "This will become your first comparable log.",
-      details: [],
-    };
-  }
+              {noteExpanded ? (
+                <Text style={[styles.noteExpandedText, { color: t.mutedText }]}>{item.day}</Text>
+              ) : null}
+            </>
+          ) : null}
+        </View>
 
-  const latestComparable = comparableLogs[0];
-  const bestComparable = [...comparableLogs].sort(
-    (a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0)
-  )[0];
+        <View style={styles.logRight}>
+          <TouchableOpacity
+            onPress={() => onDuplicate(item)}
+            activeOpacity={0.85}
+            accessibilityLabel="Duplicate log"
+            style={[styles.sideActionBtn, { backgroundColor: t.cardAlt, borderColor: t.border }]}
+          >
+            <Ionicons name="copy-outline" size={17} color={t.text} />
+          </TouchableOpacity>
 
-  const currentVolume = Math.max(1, currentWeight) * currentReps * currentSets;
-  const latestVolume = Number(latestComparable.volume ?? 0);
-  const bestVolume = Number(bestComparable.volume ?? 0);
+          <TouchableOpacity
+            onPress={() => onEdit(item)}
+            activeOpacity={0.85}
+            accessibilityLabel="Edit log"
+            style={[styles.sideActionBtn, { backgroundColor: t.secondaryBg, borderColor: t.secondaryBg }]}
+          >
+            <Ionicons name="create-outline" size={17} color={t.secondaryText} />
+          </TouchableOpacity>
 
-  const weightDelta = currentWeight - Number(latestComparable.weight ?? 0);
-  const repDelta = currentReps - Number(bestComparable.reps ?? 0);
-  const volumeVsLast = currentVolume - latestVolume;
-
-  let tone: CompareInsightTone = "same";
-  let title = "This matches your last comparable set.";
-
-  if (currentWeight <= 0 && currentReps > Number(bestComparable.reps ?? 0)) {
-    tone = "up";
-    title = "This would beat your best comparable bodyweight set.";
-  } else if (currentVolume > bestVolume && bestVolume > 0) {
-    tone = "up";
-    title = `This beats your best comparable set by ${currentVolume - bestVolume} volume.`;
-  } else if (currentVolume > latestVolume) {
-    tone = "up";
-    title = `This is ${currentVolume - latestVolume} volume above your last comparable set.`;
-  } else if (currentVolume < latestVolume) {
-    tone = "down";
-    title = `${latestVolume - currentVolume} volume below your last comparable set.`;
-  }
-
-  const details = [
-    `${weightDelta === 0 ? "±0" : weightDelta > 0 ? "+" + weightDelta : String(weightDelta)} kg vs last working`,
-    `${repDelta === 0 ? "Matches" : repDelta > 0 ? "+" + repDelta : String(repDelta)} reps vs best comparable`,
-    `${volumeVsLast === 0 ? "±0" : volumeVsLast > 0 ? "+" + volumeVsLast : String(volumeVsLast)} volume vs last time`,
-  ];
-
-  return { tone, title, details };
-}
-
-function getTrendCallouts(logs: LogRow[]) {
-  if (logs.length === 0) return ["No working logs yet."];
-  const latest = logs[0];
-  const oldestSlice = [...logs].slice(0, 6).reverse();
-  const first = oldestSlice[0];
-  const last = oldestSlice[oldestSlice.length - 1];
-  const weightDelta = Number(last?.weight ?? 0) - Number(first?.weight ?? 0);
-  const volumeSeries = oldestSlice.map((log) => Number(log.volume ?? 0));
-  let improvingSessions = 1;
-  for (let i = volumeSeries.length - 1; i > 0; i -= 1) {
-    if (volumeSeries[i] >= volumeSeries[i - 1]) improvingSessions += 1;
-    else break;
-  }
-  const repDelta = Number(last?.reps ?? 0) - Number(first?.reps ?? 0);
-  const daysSinceLast = latest?.created_at
-    ? Math.floor((Date.now() - new Date(latest.created_at).getTime()) / (1000 * 60 * 60 * 24))
-    : null;
-
-  return [
-    weightDelta > 0
-      ? `Weight up ${weightDelta} kg over last ${oldestSlice.length} working logs`
-      : weightDelta < 0
-        ? `Weight down ${Math.abs(weightDelta)} kg over last ${oldestSlice.length} working logs`
-        : "Weight is flat across recent working logs",
-    improvingSessions >= 3
-      ? `Volume improved ${improvingSessions} logs in a row`
-      : repDelta > 0
-        ? `Rep performance is trending up`
-        : repDelta < 0
-          ? `Rep performance dipped recently`
-          : "Rep performance is flat",
-    daysSinceLast !== null && daysSinceLast >= 1
-      ? `No working logs in ${daysSinceLast} day${daysSinceLast === 1 ? "" : "s"}`
-      : "You logged this exercise recently",
-  ];
-}
-
-
-function getHeaderTitle(name: string | null | undefined) {
-  if (!name) return "Exercise";
-  return name.length > 24 ? `${name.slice(0, 24).trim()}…` : name;
-}
-
-function getPrBoardItems(logs: LogRow[], currentPrOwners: CurrentPrOwners, dashboardMetrics: { bestVolumeLog: LogRow | null; bodyweightRepPR: number }, lastLog: LogRow | null): RecordShortcut[] {
-  const bestVolumeLabel = dashboardMetrics.bestVolumeLog
-    ? `${formatCompactWeight(dashboardMetrics.bestVolumeLog.weight)} × ${dashboardMetrics.bestVolumeLog.reps} × ${dashboardMetrics.bestVolumeLog.sets}`
-    : "—";
-  const lastLoggedLabel = lastLog
-    ? `${formatCompactWeight(lastLog.weight)} × ${lastLog.reps} × ${lastLog.sets}`
-    : "—";
-
-  return [
-    {
-      key: "heaviest",
-      label: "Heaviest PR",
-      value:
-        currentPrOwners.heaviestId && logs.find((log) => log.id === currentPrOwners.heaviestId)
-          ? (() => {
-            const found = logs.find((log) => log.id === currentPrOwners.heaviestId)!;
-            return `${formatCompactWeight(found.weight)} × ${found.reps}`;
-          })()
-          : "—",
-      logId: currentPrOwners.heaviestId,
-      accent: PR_COLORS.heaviest,
-    },
-    {
-      key: "volume",
-      label: "Volume PR",
-      value: bestVolumeLabel,
-      logId: dashboardMetrics.bestVolumeLog?.id ?? null,
-      accent: PR_COLORS.volume,
-    },
-    {
-      key: "bw",
-      label: "BW Rep PR",
-      value: dashboardMetrics.bodyweightRepPR > 0 ? `${dashboardMetrics.bodyweightRepPR} reps` : "—",
-      logId: currentPrOwners.repsId,
-      accent: PR_COLORS.reps,
-    },
-    {
-      key: "last",
-      label: "Last Logged",
-      value: lastLoggedLabel,
-      logId: lastLog?.id ?? null,
-      accent: PR_COLORS.recent,
-    },
-  ];
-}
+          <TouchableOpacity
+            onPress={() => onDelete(item.id)}
+            activeOpacity={0.85}
+            accessibilityLabel="Delete log"
+            style={[styles.sideActionBtn, { backgroundColor: t.danger, borderColor: t.danger }]}
+          >
+            <Ionicons name="trash-outline" size={17} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </>
+  );
+}, (prev, next) => {
+  return (
+    prev.item === next.item &&
+    prev.showMonthHeader === next.showMonthHeader &&
+    prev.currentMonth === next.currentMonth &&
+    prev.monthCollapsed === next.monthCollapsed &&
+    prev.noteExpanded === next.noteExpanded &&
+    prev.leftAccentColor === next.leftAccentColor &&
+    sameMarkers(prev.markers, next.markers) &&
+    sameTheme(prev.t, next.t)
+  );
+});
 
 export default function ExerciseScreen() {
   const router = useRouter();
   const t = useAppTheme();
   const isOnline = useIsOnline();
+  const isDarkTheme = useMemo(
+    () => isDarkColor(t.background) || isDarkColor(t.card),
+    [t.background, t.card]
+  );
+  const pageBackground = isDarkTheme
+    ? EXERCISE_BACKGROUND.dark
+    : EXERCISE_BACKGROUND.light;
+  const bubbleColors = isDarkTheme ? EXERCISE_BUBBLES.dark : EXERCISE_BUBBLES.light;
   const params = useLocalSearchParams<{
     slug?: string;
     quickLog?: string;
@@ -601,7 +360,6 @@ export default function ExerciseScreen() {
   const [statusMsg, setStatusMsg] = useState("");
   const [restSecondsLeft, setRestSecondsLeft] = useState(0);
   const [restDuration, setRestDuration] = useState(120);
-  const [dashboardCollapsed, setDashboardCollapsed] = useState(false);
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [sessionLogIds, setSessionLogIds] = useState<string[]>([]);
   const [sessionVolume, setSessionVolume] = useState(0);
@@ -619,6 +377,9 @@ export default function ExerciseScreen() {
   const listRef = useRef<FlatList<LogRow> | null>(null);
   const loggerAnchorY = useRef(0);
   const advancedInsightsAnchorY = useRef(0);
+  const bubbleOneAnim = useRef(new Animated.Value(0)).current;
+  const bubbleTwoAnim = useRef(new Animated.Value(0)).current;
+  const bubbleThreeAnim = useRef(new Animated.Value(0)).current;
 
   const scrollToLogger = () => {
     const target = Math.max(0, loggerAnchorY.current - 16);
@@ -633,6 +394,104 @@ export default function ExerciseScreen() {
       listRef.current?.scrollToOffset({ offset: target, animated: true });
     });
   };
+
+  useEffect(() => {
+    const loops = [
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(bubbleOneAnim, {
+            toValue: 1,
+            duration: 16000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(bubbleOneAnim, {
+            toValue: 0,
+            duration: 16000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(bubbleTwoAnim, {
+            toValue: 1,
+            duration: 19000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(bubbleTwoAnim, {
+            toValue: 0,
+            duration: 19000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(bubbleThreeAnim, {
+            toValue: 1,
+            duration: 22000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(bubbleThreeAnim, {
+            toValue: 0,
+            duration: 22000,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ])
+      ),
+    ];
+
+    loops.forEach((loop) => loop.start());
+
+    return () => {
+      loops.forEach((loop) => loop.stop());
+    };
+  }, [bubbleOneAnim, bubbleThreeAnim, bubbleTwoAnim]);
+
+  const bubbleOneTranslateX = bubbleOneAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-24, 28],
+  });
+  const bubbleOneTranslateY = bubbleOneAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-10, 36],
+  });
+  const bubbleOneScale = bubbleOneAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.08],
+  });
+
+  const bubbleTwoTranslateX = bubbleTwoAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [30, -32],
+  });
+  const bubbleTwoTranslateY = bubbleTwoAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [18, -22],
+  });
+  const bubbleTwoScale = bubbleTwoAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1.04, 0.96],
+  });
+
+  const bubbleThreeTranslateX = bubbleThreeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-18, 34],
+  });
+  const bubbleThreeTranslateY = bubbleThreeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [26, -18],
+  });
+  const bubbleThreeScale = bubbleThreeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.98, 1.08],
+  });
 
   const cacheId = user?.id && slug ? cacheKey(["exercise", user.id, slug]) : null;
   const pendingQueueKey = user?.id && exercise?.id ? cacheKey(["exercise-pending", user.id, exercise.id]) : null;
@@ -882,7 +741,7 @@ export default function ExerciseScreen() {
     return () => {
       active = false;
     };
-  }, [exercise?.id, user?.id, isOnline, cacheId, splitName]);
+  }, [exercise, user?.id, isOnline, cacheId, splitName]);
 
   useEffect(() => {
     if (!quickLog || logs.length === 0 || editingId) return;
@@ -1027,13 +886,6 @@ export default function ExerciseScreen() {
     return [...workingLogs].sort((a, b) => Number(b.volume ?? 0) - Number(a.volume ?? 0))[0];
   }, [workingLogs]);
 
-  const recentTrendLogs = useMemo(() => [...workingLogs].slice(0, 7).reverse(), [workingLogs]);
-
-  const trendMaxValue = useMemo(() => {
-    const max = Math.max(0, ...recentTrendLogs.map((log) => getTrendMetricValue(log, trendMetric)));
-    return max || 1;
-  }, [recentTrendLogs, trendMetric]);
-
   const currentComparableInsight = useMemo(
     () => getProgressInsight(newLog.weight, newLog.reps, newLog.sets, workingLogs, logTag),
     [newLog.weight, newLog.reps, newLog.sets, workingLogs, logTag]
@@ -1150,11 +1002,20 @@ export default function ExerciseScreen() {
       },
       {
         id: "rep",
-        label: "+1 rep",
+        label: "1 rep",
         icon: "add-outline",
         apply: () => {
           setNewLog((prev) => ({ ...prev, reps: addInteger(prev.reps || String(baseReps), 1) }));
           setStatusMsg("Suggested next set: +1 rep.");
+        },
+      },
+      {
+        id: "set",
+        label: "1 set",
+        icon: "add-outline",
+        apply: () => {
+          setNewLog((prev) => ({ ...prev, sets: addInteger(prev.sets || String(baseSets), 1) }));
+          setStatusMsg("Suggested next set: +1 set.");
         },
       },
       {
@@ -1175,6 +1036,31 @@ export default function ExerciseScreen() {
     ];
   }, [lastWorkingLog, newLog.weight, newLog.reps, newLog.sets, weightJump]);
 
+  const coachNextSetInsight = useMemo(() => {
+    const lastCreatedAt = lastWorkingLog?.created_at ? new Date(lastWorkingLog.created_at).getTime() : NaN;
+    const daysSinceLastWorkingLog = Number.isFinite(lastCreatedAt)
+      ? Math.floor((Date.now() - lastCreatedAt) / (1000 * 60 * 60 * 24))
+      : null;
+
+    return getCoachNextSetInsight({
+      currentWeight: parseFloat(newLog.weight) || 0,
+      currentReps: parseInt(newLog.reps, 10) || 0,
+      currentSets: parseInt(newLog.sets, 10) || 0,
+      lastWeight: Number(lastWorkingLog?.weight ?? 0),
+      lastReps: Number(lastWorkingLog?.reps ?? 0),
+      lastSets: Number(lastWorkingLog?.sets ?? 0),
+      bestWeight: Number(bestWorkingLog?.weight ?? 0),
+      bestReps: Number(bestWorkingLog?.reps ?? 0),
+      bestSets: Number(bestWorkingLog?.sets ?? 0),
+      lastVolume: Number(lastWorkingLog?.volume ?? 0),
+      bestVolume: Number(bestWorkingLog?.volume ?? 0),
+      currentVolume,
+      restSecondsLeft,
+      recentWorkingLogCount: workingLogs.length,
+      daysSinceLastWorkingLog,
+    });
+  }, [bestWorkingLog, currentVolume, lastWorkingLog, newLog.reps, newLog.sets, newLog.weight, restSecondsLeft, workingLogs.length]);
+
   const resetForm = useCallback(() => {
     setNewLog({ weight: "", reps: "", sets: "", note: "" });
     setLogTag("working");
@@ -1182,55 +1068,6 @@ export default function ExerciseScreen() {
     setFormError("");
     setStatusMsg("");
   }, []);
-
-  const repeatLastLog = useCallback(() => {
-    if (!lastLog) return;
-
-    setNewLog({
-      weight: lastLog.weight && Number(lastLog.weight) > 0 ? String(lastLog.weight) : "",
-      reps: String(lastLog.reps),
-      sets: String(lastLog.sets),
-      note: "",
-    });
-    setLogTag(getLogTag(lastLog));
-    setEditingId(null);
-    setFormError("");
-    setStatusMsg("Repeated last log.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [lastLog]);
-
-  const applySameAsLast = useCallback(() => {
-    if (!lastLog) return;
-    repeatLastLog();
-  }, [lastLog, repeatLastLog]);
-
-  const applySameAsLastWorking = useCallback(() => {
-    if (!lastWorkingLog) return;
-
-    setNewLog({
-      weight: lastWorkingLog.weight && Number(lastWorkingLog.weight) > 0 ? String(lastWorkingLog.weight) : "",
-      reps: String(lastWorkingLog.reps),
-      sets: String(lastWorkingLog.sets),
-      note: "",
-    });
-    setLogTag(getLogTag(lastWorkingLog));
-    setStatusMsg("Copied last working set.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [lastWorkingLog]);
-
-  const applySameAsBest = useCallback(() => {
-    if (!bestWorkingLog) return;
-
-    setNewLog({
-      weight: bestWorkingLog.weight && Number(bestWorkingLog.weight) > 0 ? String(bestWorkingLog.weight) : "",
-      reps: String(bestWorkingLog.reps),
-      sets: String(bestWorkingLog.sets),
-      note: "",
-    });
-    setLogTag(getLogTag(bestWorkingLog));
-    setStatusMsg("Copied best working set.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [bestWorkingLog]);
 
   const duplicateLog = useCallback((log: LogRow) => {
     setNewLog({
@@ -1244,27 +1081,6 @@ export default function ExerciseScreen() {
     setStatusMsg("Copied log into quick logger.");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
-
-  const applyPlusWeight = (delta: number) => {
-    setNewLog((prev) => ({ ...prev, weight: addWeight(prev.weight, delta) }));
-    setFormError("");
-    setStatusMsg(delta > 0 ? `Added ${delta} kg.` : "Updated weight.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const applyPlusRep = (delta: number) => {
-    setNewLog((prev) => ({ ...prev, reps: addInteger(prev.reps, delta) }));
-    setFormError("");
-    setStatusMsg(delta > 0 ? `Added ${delta} rep.` : "Updated reps.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const applyPlusSet = (delta: number) => {
-    setNewLog((prev) => ({ ...prev, sets: addInteger(prev.sets, delta) }));
-    setFormError("");
-    setStatusMsg(delta > 0 ? `Added ${delta} set.` : "Updated sets.");
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
 
   const handleChange = (field: "weight" | "reps" | "sets" | "note", value: string) => {
     setStatusMsg("");
@@ -1519,6 +1335,14 @@ export default function ExerciseScreen() {
 
   const keyExtractor = useCallback((item: LogRow) => item.id, []);
 
+  const toggleMonthCollapsed = useCallback((month: string) => {
+    setCollapsedMonths((prev) => ({ ...prev, [month]: !prev[month] }));
+  }, []);
+
+  const toggleNoteExpanded = useCallback((id: string) => {
+    setExpandedNotes((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
 
   const renderItem = useCallback(
     ({ item, index }: { item: LogRow; index: number }) => {
@@ -1564,159 +1388,21 @@ export default function ExerciseScreen() {
               : "transparent";
 
       return (
-        <>
-          {showMonthHeader ? (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() =>
-                setCollapsedMonths((prev) => ({ ...prev, [currentMonth]: !prev[currentMonth] }))
-              }
-              style={styles.monthHeaderWrap}
-            >
-              <Text style={[styles.monthHeaderText, { color: t.mutedText }]}>
-                {currentMonth} {collapsedMonths[currentMonth] ? "· Tap to expand" : "· Tap to collapse"}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-
-          <TouchableOpacity
-            activeOpacity={0.92}
-            onLongPress={() => duplicateLog(item)}
-            style={[
-              styles.logCard,
-              {
-                backgroundColor: t.card,
-                borderColor: markers.hasAnyPr ? leftAccentColor : t.border,
-                shadowColor: leftAccentColor,
-              },
-              markers.hasAnyPr && styles.logCardPr,
-            ]}
-          >
-            <View
-              style={[
-                styles.logPrRail,
-                { backgroundColor: markers.hasAnyPr ? leftAccentColor : "transparent" },
-              ]}
-            />
-
-            <View style={styles.logLeft}>
-              <View style={styles.logTitleRow}>
-                {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
-                  <Ionicons
-                    name={markers.hasAnyPr ? "trophy-outline" : "flash-outline"}
-                    size={16}
-                    color={markers.hasAnyPr ? leftAccentColor : t.text}
-                  />
-                ) : null}
-                <Text style={[styles.logText, { color: t.text }]}>{formatLogLine(item)}</Text>
-              </View>
-
-              <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(item.created_at)}</Text>
-              <View style={styles.logMetaRow}>
-                <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
-                  <Text style={[styles.logMetaChipText, { color: t.text }]}>
-                    {getLogTagLabel(getLogTag(item))}
-                  </Text>
-                </View>
-
-                <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
-                  <Text style={[styles.logMetaChipText, { color: t.text }]}>
-                    Vol {Number(item.volume ?? 0)}
-                  </Text>
-                </View>
-
-                <View style={styles.logIndicatorRow}>
-                  {markers.isCurrentHeaviest || markers.isPreviousHeaviest ? (
-                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.heaviest }]} />
-                  ) : null}
-                  {markers.isCurrentVolume || markers.isPreviousVolume ? (
-                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.volume }]} />
-                  ) : null}
-                  {markers.isCurrentRep || markers.isPreviousRep ? (
-                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.reps }]} />
-                  ) : null}
-                  {markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume ? (
-                    <View style={[styles.logIndicatorDot, { backgroundColor: PR_COLORS.recent }]} />
-                  ) : null}
-                </View>
-
-                {item.pending ? (
-                  <View style={[styles.pendingChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
-                    <Text style={[styles.pendingChipText, { color: t.mutedText }]}>Pending</Text>
-                  </View>
-                ) : null}
-              </View>
-
-              {(markers.hasAnyPr || markers.isSessionBest || markers.isTodayHeaviest || markers.isTodayVolume) ? (
-                <Text style={[styles.logIndicatorHint, { color: t.mutedText }]}>
-                  {markers.isCurrentHeaviest
-                    ? "Current heaviest PR"
-                    : markers.isCurrentVolume
-                      ? "Current volume PR"
-                      : markers.isCurrentRep
-                        ? "Current bodyweight rep PR"
-                        : markers.isSessionBest
-                          ? "Session best"
-                          : markers.isTodayHeaviest
-                            ? "Today’s heaviest"
-                            : markers.isTodayVolume
-                              ? "Today’s highest volume"
-                              : markers.isPreviousHeaviest || markers.isPreviousVolume || markers.isPreviousRep
-                                ? "Previous PR milestone"
-                                : ""}
-                </Text>
-              ) : null}
-
-              {item.day ? (
-                <>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() =>
-                      setExpandedNotes((prev) => ({ ...prev, [item.id]: !prev[item.id] }))
-                    }
-                  >
-                    <Text style={[styles.noteToggleText, { color: t.link }]}>
-                      {noteExpanded ? "Hide note" : "Show note"}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {noteExpanded ? (
-                    <Text style={[styles.noteExpandedText, { color: t.mutedText }]}>{item.day}</Text>
-                  ) : null}
-                </>
-              ) : null}
-            </View>
-
-            <View style={styles.logRight}>
-              <TouchableOpacity
-                onPress={() => duplicateLog(item)}
-                activeOpacity={0.85}
-                style={[styles.sideActionBtn, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-              >
-                <Ionicons name="copy-outline" size={16} color={t.text} />
-                <Text style={[styles.sideActionText, { color: t.text }]}>Duplicate</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => handleEdit(item)}
-                activeOpacity={0.85}
-                style={[styles.sideActionBtn, { backgroundColor: t.secondaryBg, borderColor: t.secondaryBg }]}
-              >
-                <Ionicons name="create-outline" size={16} color={t.secondaryText} />
-                <Text style={[styles.sideActionText, { color: t.secondaryText }]}>Edit</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => handleDelete(item.id)}
-                activeOpacity={0.85}
-                style={[styles.sideActionBtn, { backgroundColor: t.danger, borderColor: t.danger }]}
-              >
-                <Ionicons name="trash-outline" size={16} color="#fff" />
-                <Text style={[styles.sideActionText, { color: "#fff" }]}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </>
+        <LogListCard
+          item={item}
+          showMonthHeader={showMonthHeader}
+          currentMonth={currentMonth}
+          monthCollapsed={monthIsCollapsed}
+          noteExpanded={noteExpanded}
+          markers={markers}
+          leftAccentColor={leftAccentColor}
+          t={t}
+          onToggleMonth={toggleMonthCollapsed}
+          onDuplicate={duplicateLog}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          onToggleNote={toggleNoteExpanded}
+        />
       );
     },
     [
@@ -1734,13 +1420,25 @@ export default function ExerciseScreen() {
       t,
       todayHeaviestId,
       todayVolumeId,
+      toggleMonthCollapsed,
+      toggleNoteExpanded,
     ]
   );
+
+  const headerStatusLabel = restSecondsLeft > 0
+    ? `Rest ${formatDurationLabel(restSecondsLeft)}`
+    : `${logs.length} log${logs.length === 1 ? "" : "s"}`;
+
+  const headerStatusIcon: keyof typeof Ionicons.glyphMap = !isOnline
+    ? "cloud-offline-outline"
+    : restSecondsLeft > 0
+      ? "timer-outline"
+      : "bar-chart-outline";
 
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: pageBackground }]}>
         <ActivityIndicator size="large" color={t.text} />
         <Text style={[styles.loadingText, { color: t.mutedText }]}>Loading exercise…</Text>
       </SafeAreaView>
@@ -1749,7 +1447,7 @@ export default function ExerciseScreen() {
 
   if (!exercise) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: pageBackground }]}>
         <Text style={{ color: t.text, fontSize: 16, fontWeight: "600" }}>Exercise not found</Text>
         <TouchableOpacity
           onPress={() => {
@@ -1769,45 +1467,59 @@ export default function ExerciseScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: t.background }]}>
-      <StatusBar barStyle={t.primaryText === "#000000" ? "light-content" : "dark-content"} />
+    <SafeAreaView style={[styles.container, { backgroundColor: pageBackground }]}>
+      <StatusBar barStyle={isDarkTheme ? "light-content" : "dark-content"} />
+
+      <ExerciseBackground
+        colors={bubbleColors}
+        bubbleOneStyle={{
+          transform: [
+            { translateX: bubbleOneTranslateX },
+            { translateY: bubbleOneTranslateY },
+            { scale: bubbleOneScale },
+          ],
+        }}
+        bubbleTwoStyle={{
+          transform: [
+            { translateX: bubbleTwoTranslateX },
+            { translateY: bubbleTwoTranslateY },
+            { scale: bubbleTwoScale },
+          ],
+        }}
+        bubbleThreeStyle={{
+          transform: [
+            { translateX: bubbleThreeTranslateX },
+            { translateY: bubbleThreeTranslateY },
+            { scale: bubbleThreeScale },
+          ],
+        }}
+      />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={10}
       >
-        <View style={styles.header}>
-          <Pressable
-            onPress={headerBack}
-            style={({ pressed }) => [
-              styles.backBtn,
-              { backgroundColor: t.card, borderColor: t.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <Ionicons name="chevron-back" size={18} color={t.text} />
-          </Pressable>
-
-          <View style={styles.headerCenter}>
-            <Text style={[styles.headerTitle, { color: t.text }]} numberOfLines={1}>
-              {getHeaderTitle(exercise.name)}
-            </Text>
-            {splitName ? (
-              <Text style={[styles.headerSubtitle, { color: t.mutedText }]} numberOfLines={1}>
-                {splitName}
-              </Text>
-            ) : null}
-          </View>
-
-          <View style={styles.headerSpacer} />
-        </View>
+        <ExerciseHeader
+          t={t}
+          exerciseName={exercise.name}
+          splitName={splitName}
+          restSecondsLeft={restSecondsLeft}
+          statusIcon={headerStatusIcon}
+          statusLabel={headerStatusLabel}
+          onBack={headerBack}
+        />
 
         <FlatList
           ref={listRef}
           data={filteredLogs}
           keyExtractor={keyExtractor}
           keyboardShouldPersistTaps="handled"
+          removeClippedSubviews={Platform.OS === "android"}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={50}
+          windowSize={7}
           getItemLayout={(_, index) => ({
             length: APPROX_LOG_CARD_HEIGHT,
             offset: APPROX_LOG_CARD_HEIGHT * index,
@@ -1889,325 +1601,23 @@ export default function ExerciseScreen() {
                   </Text>
                 </View>
               ) : null}
-              <View style={[styles.prBoardCard, { backgroundColor: t.card, borderColor: t.border }]}>
-                <View style={styles.prBoardHeader}>
-                  <View>
-                    <Text style={[styles.prBoardEyebrow, { color: t.mutedText }]}>PR Board</Text>
-                    <Text style={[styles.prBoardTitle, { color: t.text }]}>Current records</Text>
-                  </View>
-                  <Ionicons name="trophy-outline" size={18} color={t.text} />
-                </View>
-
-                <View style={styles.prBoardGrid}>
-                  {prBoardItems.map((record) => (
-                    <TouchableOpacity
-                      key={record.key}
-                      onPress={() => scrollToLogCard(record.logId)}
-                      activeOpacity={0.88}
-                      style={[styles.prBoardItem, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                    >
-                      <View style={styles.prBoardItemTop}>
-                        <View style={[styles.prBoardDot, { backgroundColor: record.accent }]} />
-                        <Text style={[styles.prBoardLabel, { color: t.mutedText }]}>{record.label}</Text>
-                      </View>
-                      <Text style={[styles.prBoardValue, { color: t.text }]} numberOfLines={2}>
-                        {record.value}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              <View style={[styles.dashboardCard, { backgroundColor: t.card, borderColor: t.border }]}>
-                <Pressable
-                  onPress={() => setDashboardCollapsed((prev) => !prev)}
-                  style={({ pressed }) => [styles.dashboardTopRow, pressed && styles.pressed]}
-                >
-                  <View style={styles.dashboardTitleWrap}>
-                    <Text style={[styles.dashboardEyebrow, { color: t.mutedText }]}>Dashboard</Text>
-                    <Text style={[styles.dashboardTitle, { color: t.text }]}>Progress snapshot</Text>
-                  </View>
-
-                  <View style={styles.dashboardRightHeader}>
-                    <View style={[styles.dashboardPill, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
-                      <Text style={[styles.dashboardPillText, { color: t.text }]}>
-                        {dashboardMetrics.totalSessions} sessions
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={dashboardCollapsed ? "chevron-down" : "chevron-up"}
-                      size={18}
-                      color={t.mutedText}
-                    />
-                  </View>
-                </Pressable>
-
-                {!dashboardCollapsed ? (
-                  <>
-                    <View style={[styles.dashboardHero, { borderColor: t.border }]}>
-                      <View style={styles.dashboardHeroBlock}>
-                        <Text style={[styles.dashboardHeroLabel, { color: t.mutedText }]}>Heaviest</Text>
-                        <Text style={[styles.dashboardHeroValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.heaviestWeight > 0
-                            ? formatWeightLabel(dashboardMetrics.heaviestWeight)
-                            : "Bodyweight"}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.heroDivider, { backgroundColor: t.border }]} />
-
-                      <View style={styles.dashboardHeroBlock}>
-                        <Text style={[styles.dashboardHeroLabel, { color: t.mutedText }]}>Latest</Text>
-                        <Text style={[styles.dashboardHeroValue, { color: t.text }]} numberOfLines={1}>
-                          {lastLog ? `${formatCompactWeight(lastLog.weight)} · ${lastLog.reps}×${lastLog.sets}` : "None"}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.dashboardGrid}>
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Total Volume</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.totalVolume}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Total Reps</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.totalReps}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Best Est. 1RM</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.bestEstimated1RM > 0
-                            ? `${dashboardMetrics.bestEstimated1RM.toFixed(1)} kg`
-                            : "—"}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Best Volume Set</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.bestVolumeLog
-                            ? `${Number(dashboardMetrics.bestVolumeLog.volume ?? 0)}`
-                            : "—"}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Bodyweight Rep PR</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.bodyweightRepPR > 0 ? dashboardMetrics.bodyweightRepPR : "—"}
-                        </Text>
-                      </View>
-
-                      <View style={[styles.dashboardStatCell, { borderColor: t.border }]}>
-                        <Text style={[styles.dashboardStatLabel, { color: t.mutedText }]}>Working Sets</Text>
-                        <Text style={[styles.dashboardStatValue, { color: t.text }]} numberOfLines={1}>
-                          {dashboardMetrics.totalSets}
-                        </Text>
-                      </View>
-                    </View>
-
-
-
-                    <View style={[styles.goalDashboardCard, { borderColor: t.border, backgroundColor: t.cardAlt }]}>
-                      <View style={styles.goalDashboardHeader}>
-                        <Text style={[styles.goalDashboardTitle, { color: t.text }]}>Last / Best / Goal</Text>
-                        <Ionicons name="sparkles-outline" size={16} color={t.mutedText} />
-                      </View>
-
-                      <View style={styles.goalDashboardGrid}>
-                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
-                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Last</Text>
-                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.last}</Text>
-                        </View>
-                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
-                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Best</Text>
-                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.best}</Text>
-                        </View>
-                        <View style={[styles.goalDashboardCell, { borderColor: t.border }]}>
-                          <Text style={[styles.goalDashboardLabel, { color: t.mutedText }]}>Goal</Text>
-                          <Text style={[styles.goalDashboardValue, { color: t.text }]} numberOfLines={2}>{goalSnapshot.goal}</Text>
-                        </View>
-                      </View>
-
-                      <View
-                        style={[
-                          styles.compareInsightCard,
-                          currentComparableInsight.tone === "up"
-                            ? styles.compareInsightUp
-                            : currentComparableInsight.tone === "same"
-                              ? styles.compareInsightSame
-                              : currentComparableInsight.tone === "down"
-                                ? styles.compareInsightDown
-                                : styles.compareInsightNeutral,
-                        ]}
-                      >
-                        <Text style={[styles.compareHintStrong, { color: t.text }]}>
-                          {currentComparableInsight.title}
-                        </Text>
-                        {currentComparableInsight.details.map((detail) => (
-                          <Text key={detail} style={[styles.compareHint, { color: t.mutedText }]}>
-                            • {detail}
-                          </Text>
-                        ))}
-                      </View>
-                    </View>
-                    <View style={styles.trendControlRow}>
-                      <View style={styles.trendToggleWrap}>
-                        {(["volume", "weight", "reps"] as TrendMetric[]).map((metric) => {
-                          const active = trendMetric === metric;
-                          return (
-                            <TouchableOpacity
-                              key={metric}
-                              onPress={() => setTrendMetric(metric)}
-                              activeOpacity={0.85}
-                              style={[
-                                styles.segmentButton,
-                                { backgroundColor: t.cardAlt, borderColor: t.border },
-                                active && { backgroundColor: t.primaryBg, borderColor: t.primaryBg },
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.segmentButtonText,
-                                  { color: active ? t.primaryText : t.text },
-                                ]}
-                              >
-                                {metric === "volume" ? "Volume" : metric === "weight" ? "Weight" : "Reps"}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-
-                      <View style={styles.trendToggleWrap}>
-                        {(["graph", "list"] as TrendView[]).map((view) => {
-                          const active = trendView === view;
-                          return (
-                            <TouchableOpacity
-                              key={view}
-                              onPress={() => setTrendView(view)}
-                              activeOpacity={0.85}
-                              style={[
-                                styles.segmentButton,
-                                { backgroundColor: t.cardAlt, borderColor: t.border },
-                                active && { backgroundColor: t.primaryBg, borderColor: t.primaryBg },
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.segmentButtonText,
-                                  { color: active ? t.primaryText : t.text },
-                                ]}
-                              >
-                                {view === "graph" ? "Graph" : "List"}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    </View>
-
-                    {recentTrendLogs.length > 0 ? (
-                      <View style={[styles.trendCard, { borderColor: t.border }]}>
-                        <View style={styles.trendHeader}>
-                          <Text style={[styles.trendTitle, { color: t.text }]}>
-                            {trendMetric === "volume"
-                              ? "Volume trend"
-                              : trendMetric === "weight"
-                                ? "Weight trend"
-                                : "Rep trend"}
-                          </Text>
-                          <Text style={[styles.trendSubtitle, { color: t.mutedText }]}>
-                            Last {recentTrendLogs.length} working logs
-                          </Text>
-                        </View>
-
-                        {trendView === "graph" ? (
-                          <>
-                            <View style={styles.trendLegend}>
-                              <View style={styles.trendLegendItem}>
-                                <View style={[styles.trendLegendDot, { backgroundColor: "#60A5FA" }]} />
-                                <Text style={[styles.trendLegendText, { color: t.mutedText }]}>Normal</Text>
-                              </View>
-                              <View style={styles.trendLegendItem}>
-                                <View style={[styles.trendLegendDot, { backgroundColor: "#A78BFA" }]} />
-                                <Text style={[styles.trendLegendText, { color: t.mutedText }]}>Highest</Text>
-                              </View>
-                              <View style={styles.trendLegendItem}>
-                                <View style={[styles.trendLegendDot, { backgroundColor: "#F59E0B" }]} />
-                                <Text style={[styles.trendLegendText, { color: t.mutedText }]}>Latest</Text>
-                              </View>
-                            </View>
-
-                            <View style={styles.trendBars}>
-                              {recentTrendLogs.map((log, idx) => {
-                                const value = getTrendMetricValue(log, trendMetric);
-                                const isHighest = value === trendMaxValue;
-                                const isLatest = idx === recentTrendLogs.length - 1;
-                                const height = Math.max(12, (value / trendMaxValue) * 78);
-
-                                let barColor = "#60A5FA";
-                                if (isHighest) barColor = "#A78BFA";
-                                if (isLatest) barColor = "#F59E0B";
-
-                                return (
-                                  <View key={log.id} style={styles.trendBarWrap}>
-                                    <Text style={[styles.trendTopLabel, { color: t.mutedText }]} numberOfLines={1}>
-                                      {value > 0 ? String(value) : "0"}
-                                    </Text>
-                                    <View
-                                      style={[
-                                        styles.trendBar,
-                                        {
-                                          height,
-                                          backgroundColor: barColor,
-                                          opacity: log.pending ? 0.55 : 1,
-                                        },
-                                      ]}
-                                    />
-                                    <Text style={[styles.trendBottomLabel, { color: t.mutedText }]}>
-                                      {format(new Date(log.created_at ?? Date.now()), "d")}
-                                    </Text>
-                                  </View>
-                                );
-                              })}
-                            </View>
-                          </>
-                        ) : (
-                          <View style={styles.trendListWrap}>
-                            {recentTrendLogs.map((log) => (
-                              <View key={log.id} style={[styles.trendListRow, { borderColor: t.border }]}>
-                                <Text style={[styles.trendListDate, { color: t.mutedText }]}>
-                                  {format(new Date(log.created_at ?? Date.now()), "MMM d")}
-                                </Text>
-                                <Text style={[styles.trendListValue, { color: t.text }]}>
-                                  {formatTrendMetricValue(trendMetric, getTrendMetricValue(log, trendMetric))}
-                                </Text>
-                              </View>
-                            ))}
-                          </View>
-                        )}
-                      </View>
-                    ) : null}
-                  </>
-                ) : null}
-              </View>
-
-
-              <View style={[styles.calloutCard, { backgroundColor: t.card, borderColor: t.border }]}>
-                <Text style={[styles.calloutTitle, { color: t.text }]}>Trend callouts</Text>
-                {trendCallouts.map((callout) => (
-                  <Text key={callout} style={[styles.calloutText, { color: t.mutedText }]}>
-                    • {callout}
-                  </Text>
-                ))}
-              </View>
+              <TrainingSummaryDeck
+                t={t}
+                prItems={prBoardItems}
+                onPressRecord={scrollToLogCard}
+                sessionsLabel={String(dashboardMetrics.totalSessions)}
+                heaviestLabel={dashboardMetrics.heaviestWeight > 0 ? formatWeightLabel(dashboardMetrics.heaviestWeight) : "Bodyweight"}
+                latestLabel={lastLog ? `${formatCompactWeight(lastLog.weight)} · ${lastLog.reps}×${lastLog.sets}` : "None"}
+                totalVolumeLabel={String(dashboardMetrics.totalVolume)}
+                totalRepsLabel={String(dashboardMetrics.totalReps)}
+                bestEstimated1RMLabel={dashboardMetrics.bestEstimated1RM > 0 ? `${dashboardMetrics.bestEstimated1RM.toFixed(1)} kg` : "—"}
+                bestVolumeLabel={dashboardMetrics.bestVolumeLog ? String(Number(dashboardMetrics.bestVolumeLog.volume ?? 0)) : "—"}
+                bodyweightRepPRLabel={dashboardMetrics.bodyweightRepPR > 0 ? `${dashboardMetrics.bodyweightRepPR}` : "—"}
+                workingSetsLabel={String(dashboardMetrics.totalSets)}
+                goalSnapshot={goalSnapshot}
+                compareInsight={currentComparableInsight}
+                trendCallouts={trendCallouts}
+              />
 
               <Pressable
                 onLayout={(event) => {
@@ -2263,303 +1673,46 @@ export default function ExerciseScreen() {
                 onLayout={(event) => {
                   loggerAnchorY.current = event.nativeEvent.layout.y;
                 }}
-                style={[styles.form, { backgroundColor: t.card, borderColor: t.border }]}
               >
-                <View style={styles.formHeader}>
-                  <Text style={[styles.formTitle, { color: t.text }]}>
-                    {editingId ? "Edit Log" : "Live Logger"}
-                  </Text>
-
-                  {lastLog && !editingId ? (
-                    <TouchableOpacity
-                      onPress={repeatLastLog}
-                      activeOpacity={0.85}
-                      style={[styles.repeatBtn, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                    >
-                      <Ionicons name="refresh-outline" size={14} color={t.text} />
-                      <Text style={[styles.repeatText, { color: t.text }]}>Repeat Last</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-
-                {lastLog ? (
-                  <Text style={[styles.lastHint, { color: t.mutedText }]}>
-                    Last: {formatLogLine(lastLog)}
-                  </Text>
-                ) : (
-                  <Text style={[styles.lastHint, { color: t.mutedText }]}>
-                    No logs yet. Add your first set below.
-                  </Text>
-                )}
-
-                <View style={styles.tagRow}>
-                  {(["working", "warmup", "topset"] as LogTag[]).map((tag) => {
-                    const active = logTag === tag;
-                    return (
-                      <TouchableOpacity
-                        key={tag}
-                        onPress={() => {
-                          setLogTag(tag);
-                          setStatusMsg(`${getLogTagLabel(tag)} selected.`);
-                          setFormError("");
-                          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        }}
-                        activeOpacity={0.85}
-                        style={[
-                          styles.tagChip,
-                          { backgroundColor: t.cardAlt, borderColor: t.border },
-                          active && { backgroundColor: t.success, borderColor: t.success },
-                        ]}
-                      >
-                        <Text style={[styles.tagText, { color: active ? "#fff" : t.text }]}>
-                          {getLogTagLabel(tag)}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <View style={styles.progressActions}>
-                  <TouchableOpacity
-                    onPress={applySameAsLast}
-                    activeOpacity={0.85}
-                    disabled={!lastLog}
-                    style={[
-                      styles.progressButton,
-                      { backgroundColor: t.cardAlt, borderColor: t.border },
-                      !lastLog && styles.progressButtonDisabled,
-                    ]}
-                  >
-                    <Ionicons name="copy-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>Same last</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={applySameAsLastWorking}
-                    activeOpacity={0.85}
-                    disabled={!lastWorkingLog}
-                    style={[
-                      styles.progressButton,
-                      { backgroundColor: t.cardAlt, borderColor: t.border },
-                      !lastWorkingLog && styles.progressButtonDisabled,
-                    ]}
-                  >
-                    <Ionicons name="layers-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>Last working</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={applySameAsBest}
-                    activeOpacity={0.85}
-                    disabled={!bestWorkingLog}
-                    style={[
-                      styles.progressButton,
-                      { backgroundColor: t.cardAlt, borderColor: t.border },
-                      !bestWorkingLog && styles.progressButtonDisabled,
-                    ]}
-                  >
-                    <Ionicons name="trophy-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>Best</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={() => applyPlusWeight(weightJump)}
-                    activeOpacity={0.85}
-                    style={[styles.progressButton, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                  >
-                    <Ionicons name="add-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>{`+${weightJump} kg`}</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={() => applyPlusRep(1)}
-                    activeOpacity={0.85}
-                    style={[styles.progressButton, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                  >
-                    <Ionicons name="add-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>+1 rep</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    onPress={() => applyPlusSet(1)}
-                    activeOpacity={0.85}
-                    style={[styles.progressButton, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                  >
-                    <Ionicons name="add-outline" size={14} color={t.text} />
-                    <Text style={[styles.progressButtonText, { color: t.text }]}>+1 set</Text>
-                  </TouchableOpacity>
-                </View>
-
-
-                <View style={styles.quickConfigRow}>
-                  <Text style={[styles.quickConfigLabel, { color: t.mutedText }]}>Weight jump</Text>
-                  <View style={styles.weightJumpWrap}>
-                    {[1.25, 2.5, 5].map((step) => {
-                      const active = weightJump === step;
-                      return (
-                        <TouchableOpacity
-                          key={step}
-                          onPress={() => {
-                            setWeightJump(step);
-                            setStatusMsg(`Default jump set to ${step} kg.`);
-                          }}
-                          activeOpacity={0.85}
-                          style={[
-                            styles.weightJumpChip,
-                            { backgroundColor: t.cardAlt, borderColor: t.border },
-                            active && { backgroundColor: t.primaryBg, borderColor: t.primaryBg },
-                          ]}
-                        >
-                          <Text style={[styles.weightJumpChipText, { color: active ? t.primaryText : t.text }]}>
-                            {step} kg
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                {suggestionActions.length > 0 ? (
-                  <View style={styles.suggestionBlock}>
-                    <Text style={[styles.quickConfigLabel, { color: t.mutedText }]}>Suggest next set</Text>
-                    <View style={styles.suggestionRow}>
-                      {suggestionActions.map((action) => (
-                        <TouchableOpacity
-                          key={action.id}
-                          onPress={() => {
-                            action.apply();
-                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          }}
-                          activeOpacity={0.85}
-                          style={[styles.suggestionChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                        >
-                          <Ionicons name={action.icon} size={14} color={t.text} />
-                          <Text style={[styles.suggestionChipText, { color: t.text }]}>{action.label}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-
-                <View style={styles.inputsRow}>
-                  <View style={styles.inputBlock}>
-                    <Text style={[styles.inputLabel, { color: t.mutedText }]}>Weight</Text>
-                    <TextInput
-                      placeholder="0"
-                      placeholderTextColor={t.mutedText}
-                      keyboardType="decimal-pad"
-                      value={newLog.weight}
-                      onChangeText={(text) => handleChange("weight", text)}
-                      style={[
-                        styles.input,
-                        { backgroundColor: t.inputBg, borderColor: t.inputBorder, color: t.text },
-                      ]}
-                    />
-                  </View>
-
-                  <View style={styles.inputBlock}>
-                    <Text style={[styles.inputLabel, { color: t.mutedText }]}>Reps</Text>
-                    <TextInput
-                      placeholder="8"
-                      placeholderTextColor={t.mutedText}
-                      keyboardType="number-pad"
-                      value={newLog.reps}
-                      onChangeText={(text) => handleChange("reps", text)}
-                      style={[
-                        styles.input,
-                        { backgroundColor: t.inputBg, borderColor: t.inputBorder, color: t.text },
-                      ]}
-                    />
-                  </View>
-
-                  <View style={styles.inputBlock}>
-                    <Text style={[styles.inputLabel, { color: t.mutedText }]}>Sets</Text>
-                    <TextInput
-                      placeholder="1"
-                      placeholderTextColor={t.mutedText}
-                      keyboardType="number-pad"
-                      value={newLog.sets}
-                      onChangeText={(text) => handleChange("sets", text)}
-                      style={[
-                        styles.input,
-                        { backgroundColor: t.inputBg, borderColor: t.inputBorder, color: t.text },
-                      ]}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.noteBlock}>
-                  <Text style={[styles.inputLabel, { color: t.mutedText }]}>Note / Tag</Text>
-                  <TextInput
-                    placeholder="Paused, strict, top set note..."
-                    placeholderTextColor={t.mutedText}
-                    value={newLog.note}
-                    onChangeText={(text) => handleChange("note", text)}
-                    style={[
-                      styles.input,
-                      { backgroundColor: t.inputBg, borderColor: t.inputBorder, color: t.text },
-                    ]}
-                  />
-                </View>
-
-                <View style={styles.formFooter}>
-                  <View style={styles.footerMetaWrap}>
-                    <Text style={[styles.volumeText, { color: t.mutedText }]}>Volume: {currentVolume}</Text>
-                    <View style={styles.restRow}>
-                      <Text style={[styles.restText, { color: t.mutedText }]}>
-                        Rest: {restSecondsLeft > 0 ? `${restSecondsLeft}s` : "Ready"}
-                      </Text>
-
-                      <View style={styles.restPresets}>
-                        {REST_PRESETS.map((seconds) => {
-                          const active = restDuration === seconds;
-                          return (
-                            <TouchableOpacity
-                              key={seconds}
-                              onPress={() => {
-                                setRestDuration(seconds);
-                                setStatusMsg(`Rest timer set to ${seconds}s.`);
-                              }}
-                              activeOpacity={0.85}
-                              style={[
-                                styles.restPreset,
-                                { backgroundColor: t.cardAlt, borderColor: t.border },
-                                active && { backgroundColor: t.primaryBg, borderColor: t.primaryBg },
-                              ]}
-                            >
-                              <Text style={[styles.restPresetText, { color: active ? t.primaryText : t.text }]}>
-                                {seconds}s
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={styles.formButtons}>
-                    {editingId ? (
-                      <TouchableOpacity
-                        onPress={resetForm}
-                        activeOpacity={0.85}
-                        style={[styles.cancelBtn, { backgroundColor: t.cardAlt, borderColor: t.border }]}
-                      >
-                        <Text style={[styles.cancelText, { color: t.text }]}>Cancel</Text>
-                      </TouchableOpacity>
-                    ) : null}
-
-                    <TouchableOpacity
-                      onPress={editingId ? handleUpdate : handleSave}
-                      activeOpacity={0.9}
-                      style={[styles.saveBtn, { backgroundColor: editingId ? t.link : t.success }]}
-                    >
-                      <Text style={styles.saveText}>{editingId ? "Update Log" : "Add Log"}</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
-                {statusMsg ? <Text style={[styles.statusText, { color: t.mutedText }]}>{statusMsg}</Text> : null}
+                <QuickLoggerCard
+                  t={t}
+                  editingId={editingId}
+                  logTag={logTag}
+                  onTagChange={(tag) => {
+                    setLogTag(tag);
+                    setStatusMsg(`${getLogTagLabel(tag)} selected.`);
+                    setFormError("");
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                  lastHint={lastLog ? `Last: ${formatLogLine(lastLog)}` : "No logs yet. Add your first set below."}
+                  value={newLog}
+                  onChange={handleChange}
+                  currentVolume={currentVolume}
+                  restDuration={restDuration}
+                  onRestDurationChange={(seconds) => {
+                    setRestDuration(seconds);
+                    setStatusMsg(`Rest timer set to ${formatDurationLabel(seconds)}.`);
+                  }}
+                  weightJump={weightJump}
+                  onWeightJumpChange={(step) => {
+                    setWeightJump(step);
+                    setStatusMsg(`Default jump set to ${step} kg.`);
+                  }}
+                  coachInsight={coachNextSetInsight}
+                  suggestionActions={suggestionActions.map((action) => ({
+                    ...action,
+                    apply: () => {
+                      action.apply();
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    },
+                  }))}
+                  lastLabel={lastWorkingLog ? formatComparableLine(lastWorkingLog) : "—"}
+                  bestLabel={bestWorkingLog ? formatComparableLine(bestWorkingLog) : "—"}
+                  formError={formError}
+                  statusMsg={statusMsg}
+                  onSave={editingId ? handleUpdate : handleSave}
+                  onCancelEdit={resetForm}
+                />
               </View>
 
               <View style={styles.logsHeader}>
@@ -2604,21 +1757,53 @@ export default function ExerciseScreen() {
 
               {filteredLogs.length === 0 ? (
                 <View style={[styles.emptyState, { backgroundColor: t.card, borderColor: t.border }]}>
-                  <Ionicons name="barbell-outline" size={22} color={t.mutedText} />
+                  <View style={[styles.emptyIconWrap, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+                    <Ionicons name="barbell-outline" size={22} color={t.text} />
+                  </View>
                   <Text style={[styles.emptyTitle, { color: t.text }]}>
                     {logs.length === 0 ? "No logs yet" : "No matching logs"}
                   </Text>
                   <Text style={[styles.emptyText, { color: t.mutedText }]}>
                     {logs.length === 0
-                      ? "Save your first set above to start tracking progress."
+                      ? "Start with a simple working set. You can edit it anytime."
                       : "Try a different filter or clear your search."}
                   </Text>
+
+                  {logs.length === 0 ? (
+                    <View style={styles.emptyActionRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.86}
+                        onPress={() => {
+                          setNewLog({ weight: "", reps: "8", sets: "3", note: "" });
+                          setLogTag("working");
+                          setStatusMsg("Bodyweight starter set ready.");
+                          scrollToLogger();
+                        }}
+                        style={[styles.emptyActionButton, { backgroundColor: t.cardAlt, borderColor: t.border }]}
+                      >
+                        <Text style={[styles.emptyActionText, { color: t.text }]}>Use Bodyweight</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        activeOpacity={0.86}
+                        onPress={() => {
+                          setNewLog({ weight: "10", reps: "5", sets: "3", note: "" });
+                          setLogTag("working");
+                          setStatusMsg("Weighted starter set ready.");
+                          scrollToLogger();
+                        }}
+                        style={[styles.emptyActionButton, { backgroundColor: t.link, borderColor: t.link }]}
+                      >
+                        <Text style={[styles.emptyActionText, { color: "#fff" }]}>Start Weighted</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
             </>
           }
           renderItem={renderItem}
-          contentContainerStyle={{ paddingBottom: 90 }}
+          contentContainerStyle={styles.listContent}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -2627,6 +1812,33 @@ export default function ExerciseScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 16 },
+  listContent: {
+    paddingBottom: 104,
+  },
+  backgroundBubbleLarge: {
+    position: "absolute",
+    width: 310,
+    height: 310,
+    borderRadius: 155,
+    top: -96,
+    left: -122,
+  },
+  backgroundBubbleMedium: {
+    position: "absolute",
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    top: 230,
+    right: -140,
+  },
+  backgroundBubbleSmall: {
+    position: "absolute",
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    bottom: 120,
+    left: -120,
+  },
   center: { flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 20 },
   loadingText: { marginTop: 12, fontSize: 14, fontWeight: "500" },
 
@@ -2662,7 +1874,22 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
   },
-  headerSpacer: { width: 42, height: 42 },
+  headerStatusChip: {
+    minWidth: 74,
+    maxWidth: 96,
+    height: 42,
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 9,
+  },
+  headerStatusText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
   backText: { fontWeight: "700", fontSize: 14 },
   pressed: { opacity: 0.82, transform: [{ scale: 0.985 }] },
 
@@ -3148,10 +2375,17 @@ const styles = StyleSheet.create({
   },
 
   form: {
-    borderRadius: 24,
-    padding: 14,
-    marginBottom: 14,
+    borderRadius: 28,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1,
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
+  },
+  formEditing: {
+    shadowOpacity: 0.14,
   },
   formHeader: {
     flexDirection: "row",
@@ -3159,7 +2393,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  formTitle: { fontWeight: "700", fontSize: 18 },
+  formTitle: { fontWeight: "900", fontSize: 19, letterSpacing: -0.2 },
+  formSubtitle: { marginTop: 3, fontSize: 12, fontWeight: "600" },
+  editingPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  editingPillText: { fontSize: 12, fontWeight: "800" },
   repeatBtn: {
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -3310,24 +2555,32 @@ const styles = StyleSheet.create({
   formButtons: {
     flexDirection: "row",
     gap: 8,
-    alignSelf: "flex-end",
+    width: "100%",
   },
   cancelBtn: {
-    paddingVertical: 11,
+    flex: 0.42,
+    paddingVertical: 13,
     paddingHorizontal: 14,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   cancelText: {
     fontWeight: "700",
     fontSize: 14,
   },
   saveBtn: {
-    paddingVertical: 11,
+    flex: 1,
+    paddingVertical: 13,
     paddingHorizontal: 16,
-    borderRadius: 14,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
   },
-  saveText: { color: "white", fontWeight: "700", fontSize: 14 },
+  saveText: { color: "white", fontWeight: "900", fontSize: 15 },
 
   errorText: {
     color: "#dc2626",
@@ -3386,11 +2639,19 @@ const styles = StyleSheet.create({
 
   emptyState: {
     borderWidth: 1,
-    borderRadius: 20,
+    borderRadius: 24,
     paddingVertical: 24,
     paddingHorizontal: 18,
     alignItems: "center",
     marginBottom: 10,
+  },
+  emptyIconWrap: {
+    width: 50,
+    height: 50,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   emptyTitle: {
     marginTop: 10,
@@ -3402,6 +2663,24 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 13,
     lineHeight: 18,
+  },
+  emptyActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+    width: "100%",
+  },
+  emptyActionButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyActionText: {
+    fontSize: 13,
+    fontWeight: "800",
   },
 
   monthHeaderWrap: {
@@ -3438,7 +2717,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   logRight: {
-    width: 96,
+    width: 40,
     justifyContent: "flex-start",
     gap: 8,
   },
@@ -3536,13 +2815,11 @@ const styles = StyleSheet.create({
   },
 
   sideActionBtn: {
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    flexDirection: "row",
+    width: 38,
+    height: 38,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
     borderWidth: 1,
   },
   sideActionText: {

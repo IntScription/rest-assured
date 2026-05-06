@@ -7,13 +7,15 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+  Animated,
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   LayoutAnimation,
   UIManager,
   type TextInputProps,
 } from "react-native";
-import React, {
+import {
   memo,
   useCallback,
   useEffect,
@@ -81,6 +83,27 @@ const TREND_COLORS = {
 
 const TOUR_HIGHLIGHT_GREEN = "#22C55E";
 
+const SCREEN_WIDTH = Dimensions.get("window").width;
+
+const ADVANCED_BACKGROUND = {
+  light: "#EAF2FF",
+  dark: "#050A14",
+};
+
+const ADVANCED_BUBBLES = {
+  light: {
+    primary: "rgba(37,99,235,0.15)",
+    secondary: "rgba(139,92,246,0.11)",
+    third: "rgba(16,185,129,0.08)",
+  },
+  dark: {
+    primary: "rgba(59,130,246,0.18)",
+    secondary: "rgba(139,92,246,0.14)",
+    third: "rgba(16,185,129,0.10)",
+  },
+};
+
+
 if (
   Platform.OS === "android" &&
   UIManager.setLayoutAnimationEnabledExperimental
@@ -100,6 +123,10 @@ function getContrastTextColor(backgroundColor: string) {
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 
   return luminance > 0.6 ? "#111111" : "#FFFFFF";
+}
+
+function isDarkThemeBackground(backgroundColor: string) {
+  return getContrastTextColor(backgroundColor) === "#FFFFFF";
 }
 
 function formatSeconds(value: number) {
@@ -306,10 +333,26 @@ const OverviewCard = memo(function OverviewCard({
         ]}
       >
         <View style={styles.trendTitleRow}>
-          <Text style={[styles.trendTitle, { color: t.text }]}>TUT Trend</Text>
-          <Text style={[styles.trendHint, { color: t.mutedText }]}>
-            Last {Math.max(recentTrendEntries.length, 1)} entries
-          </Text>
+          <View>
+            <Text style={[styles.trendTitle, { color: t.text }]}>TUT Trend</Text>
+            <Text style={[styles.trendHint, { color: t.mutedText }]}>
+              Last {Math.max(recentTrendEntries.length, 1)} entries
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.bestTrendChip,
+              { backgroundColor: t.cardAlt, borderColor: t.border },
+            ]}
+          >
+            <View
+              style={[styles.bestTrendDot, { backgroundColor: TREND_COLORS.highest }]}
+            />
+            <Text style={[styles.bestTrendText, { color: t.text }]}>
+              Best {formatSeconds(best)}
+            </Text>
+          </View>
         </View>
 
         <View style={styles.legendRow}>
@@ -401,6 +444,8 @@ const OverviewCard = memo(function OverviewCard({
 type EntryCardProps = {
   item: TutEntry;
   t: ReturnType<typeof useAppTheme>;
+  isLatest: boolean;
+  isBest: boolean;
   onEdit: (entry: TutEntry) => void;
   onDelete: (entryId: string) => void;
 };
@@ -408,11 +453,19 @@ type EntryCardProps = {
 const EntryCard = memo(function EntryCard({
   item,
   t,
+  isLatest,
+  isBest,
   onEdit,
   onDelete,
 }: EntryCardProps) {
   const handleEditPress = useCallback(() => onEdit(item), [item, onEdit]);
   const handleDeletePress = useCallback(() => onDelete(item.id), [item.id, onDelete]);
+
+  const accentColor = isBest
+    ? TREND_COLORS.highest
+    : isLatest
+      ? TREND_COLORS.latest
+      : "transparent";
 
   return (
     <View
@@ -420,10 +473,20 @@ const EntryCard = memo(function EntryCard({
         styles.entryCard,
         {
           backgroundColor: t.card,
-          borderColor: t.border,
+          borderColor: isBest || isLatest ? accentColor : t.border,
+          shadowColor: accentColor,
         },
+        (isBest || isLatest) && styles.entryCardFeatured,
       ]}
     >
+      <View
+        pointerEvents="none"
+        style={[
+          styles.entryRail,
+          { backgroundColor: isBest || isLatest ? accentColor : "transparent" },
+        ]}
+      />
+
       <View style={styles.entryTopRow}>
         <View style={styles.entryTopLeft}>
           <Text style={[styles.entryTut, { color: t.text }]}>
@@ -432,6 +495,34 @@ const EntryCard = memo(function EntryCard({
           <Text style={[styles.entryDate, { color: t.mutedText }]}>
             {formatDateLabel(item.performed_on)}
           </Text>
+
+          {isBest || isLatest ? (
+            <View style={styles.entryBadgeRow}>
+              {isBest ? (
+                <View
+                  style={[
+                    styles.entryBadge,
+                    { backgroundColor: t.cardAlt, borderColor: t.border },
+                  ]}
+                >
+                  <Ionicons name="trophy-outline" size={12} color={TREND_COLORS.highest} />
+                  <Text style={[styles.entryBadgeText, { color: t.text }]}>Best</Text>
+                </View>
+              ) : null}
+
+              {isLatest ? (
+                <View
+                  style={[
+                    styles.entryBadge,
+                    { backgroundColor: t.cardAlt, borderColor: t.border },
+                  ]}
+                >
+                  <Ionicons name="time-outline" size={12} color={TREND_COLORS.latest} />
+                  <Text style={[styles.entryBadgeText, { color: t.text }]}>Latest</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.entryActions}>
@@ -488,6 +579,16 @@ export default function AdvancedScreen() {
     () => getContrastTextColor(t.primaryBg),
     [t.primaryBg]
   );
+
+  const isDarkMode = useMemo(() => isDarkThemeBackground(t.background), [t.background]);
+  const advancedBackground = isDarkMode
+    ? ADVANCED_BACKGROUND.dark
+    : ADVANCED_BACKGROUND.light;
+  const bubblePalette = isDarkMode ? ADVANCED_BUBBLES.dark : ADVANCED_BUBBLES.light;
+
+  const bubbleOne = useRef(new Animated.Value(0)).current;
+  const bubbleTwo = useRef(new Animated.Value(0)).current;
+  const bubbleThree = useRef(new Animated.Value(0)).current;
 
   const params = useLocalSearchParams<{
     slug?: string | string[];
@@ -555,6 +656,79 @@ export default function AdvancedScreen() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const makeLoop = (value: Animated.Value, duration: number) => {
+      value.setValue(0);
+      return Animated.loop(
+        Animated.sequence([
+          Animated.timing(value, {
+            toValue: 1,
+            duration,
+            useNativeDriver: true,
+          }),
+          Animated.timing(value, {
+            toValue: 0,
+            duration,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+    };
+
+    const one = makeLoop(bubbleOne, 15000);
+    const two = makeLoop(bubbleTwo, 19000);
+    const three = makeLoop(bubbleThree, 23000);
+
+    one.start();
+    two.start();
+    three.start();
+
+    return () => {
+      one.stop();
+      two.stop();
+      three.stop();
+    };
+  }, [bubbleOne, bubbleTwo, bubbleThree]);
+
+  const bubbleOneX = bubbleOne.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-28, 28],
+  });
+  const bubbleOneY = bubbleOne.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 42],
+  });
+  const bubbleOneScale = bubbleOne.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.08],
+  });
+
+  const bubbleTwoX = bubbleTwo.interpolate({
+    inputRange: [0, 1],
+    outputRange: [24, -36],
+  });
+  const bubbleTwoY = bubbleTwo.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -34],
+  });
+  const bubbleTwoScale = bubbleTwo.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.12],
+  });
+
+  const bubbleThreeX = bubbleThree.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-14, 32],
+  });
+  const bubbleThreeY = bubbleThree.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -28],
+  });
+  const bubbleThreeScale = bubbleThree.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.1],
+  });
 
   const fetchExerciseAndEntries = useCallback(async () => {
     if (!slug) {
@@ -694,6 +868,29 @@ export default function AdvancedScreen() {
     },
     []
   );
+
+  const applyTutPreset = useCallback(
+    (seconds: number) => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      updateFormField("tut", String(seconds));
+      void Haptics.selectionAsync();
+    },
+    [updateFormField]
+  );
+
+  const startWithPreset = useCallback((seconds: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setForm((prev) => ({
+      ...prev,
+      tut: String(seconds),
+      sets: prev.sets || "1",
+      reps: prev.reps || "1",
+    }));
+    void Haptics.selectionAsync();
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 360, animated: true });
+    });
+  }, []);
 
   const resetForm = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -944,9 +1141,16 @@ export default function AdvancedScreen() {
 
   const renderEntry = useCallback(
     ({ item }: { item: TutEntry }) => (
-      <EntryCard item={item} t={t} onEdit={handleEdit} onDelete={handleDelete} />
+      <EntryCard
+        item={item}
+        t={t}
+        isLatest={item.id === latestEntryId}
+        isBest={item.tut_seconds === best && best > 0}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+      />
     ),
-    [handleDelete, handleEdit, t]
+    [best, handleDelete, handleEdit, latestEntryId, t]
   );
 
   const listHeader = useMemo(
@@ -1032,15 +1236,24 @@ export default function AdvancedScreen() {
           style={[
             styles.sectionCard,
             {
-              backgroundColor: t.card,
-              borderColor: t.border,
+              backgroundColor: editingId
+                ? isDarkMode
+                  ? "rgba(59,130,246,0.12)"
+                  : "rgba(37,99,235,0.08)"
+                : t.card,
+              borderColor: editingId ? t.primaryBg : t.border,
             },
           ]}
         >
           <View style={styles.formHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: t.text }]}>
-              {editingId ? "Edit Entry" : "Manual Entry"}
-            </Text>
+            <View style={styles.formTitleWrap}>
+              <Text style={[styles.sectionTitle, { color: t.text }]}>
+                {editingId ? "Edit Entry" : "TUT Logger"}
+              </Text>
+              <Text style={[styles.formSubtitle, { color: t.mutedText }]}>
+                Prioritize TUT, sets, and reps. Add optional load, RPE, rest, and notes.
+              </Text>
+            </View>
 
             {editingId ? (
               <Pressable onPress={resetForm}>
@@ -1049,6 +1262,35 @@ export default function AdvancedScreen() {
                 </Text>
               </Pressable>
             ) : null}
+          </View>
+
+          <View style={styles.presetRow}>
+            {[20, 30, 45, 60].map((seconds) => (
+              <Pressable
+                key={seconds}
+                onPress={() => applyTutPreset(seconds)}
+                style={({ pressed }) => [
+                  styles.presetChip,
+                  {
+                    backgroundColor: form.tut === String(seconds) ? t.primaryBg : t.cardAlt,
+                    borderColor: form.tut === String(seconds) ? t.primaryBg : t.border,
+                    opacity: pressed ? 0.82 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.presetChipText,
+                    {
+                      color:
+                        form.tut === String(seconds) ? primaryButtonTextColor : t.text,
+                    },
+                  ]}
+                >
+                  {seconds}s
+                </Text>
+              </Pressable>
+            ))}
           </View>
 
           <View style={styles.rowInputs}>
@@ -1065,10 +1307,10 @@ export default function AdvancedScreen() {
             <View style={styles.inputCol}>
               <Input
                 t={t}
-                placeholder="Load (kg)"
-                value={form.load}
-                onChangeText={(v) => updateFormField("load", v)}
-                keyboardType={Platform.OS === "ios" ? "decimal-pad" : "numeric"}
+                placeholder="Sets*"
+                value={form.sets}
+                onChangeText={(v) => updateFormField("sets", v)}
+                keyboardType={Platform.OS === "ios" ? "number-pad" : "numeric"}
               />
             </View>
           </View>
@@ -1077,9 +1319,9 @@ export default function AdvancedScreen() {
             <View style={styles.inputCol}>
               <Input
                 t={t}
-                placeholder="Sets*"
-                value={form.sets}
-                onChangeText={(v) => updateFormField("sets", v)}
+                placeholder="Reps*"
+                value={form.reps}
+                onChangeText={(v) => updateFormField("reps", v)}
                 keyboardType={Platform.OS === "ios" ? "number-pad" : "numeric"}
               />
             </View>
@@ -1087,10 +1329,10 @@ export default function AdvancedScreen() {
             <View style={styles.inputCol}>
               <Input
                 t={t}
-                placeholder="Reps*"
-                value={form.reps}
-                onChangeText={(v) => updateFormField("reps", v)}
-                keyboardType={Platform.OS === "ios" ? "number-pad" : "numeric"}
+                placeholder="Load (kg)"
+                value={form.load}
+                onChangeText={(v) => updateFormField("load", v)}
+                keyboardType={Platform.OS === "ios" ? "decimal-pad" : "numeric"}
               />
             </View>
           </View>
@@ -1197,15 +1439,35 @@ export default function AdvancedScreen() {
               No advanced entries yet
             </Text>
             <Text style={[styles.emptySubtitle, { color: t.mutedText }]}>
-              This empty page is normal. Save your first manual TUT log above.
+              This empty page is normal. Start with a common TUT target and adjust from there.
             </Text>
+
+            <View style={styles.emptyPresetRow}>
+              {[30, 60].map((seconds) => (
+                <Pressable
+                  key={seconds}
+                  onPress={() => startWithPreset(seconds)}
+                  style={({ pressed }) => [
+                    styles.emptyPresetButton,
+                    {
+                      backgroundColor: t.cardAlt,
+                      borderColor: t.border,
+                      opacity: pressed ? 0.82 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.emptyPresetText, { color: t.text }]}>
+                    Start with {seconds}s
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
         ) : null}
       </>
     ),
     [
       t,
-      handleGoBack,
       tourActive,
       tourStep,
       latest,
@@ -1217,6 +1479,9 @@ export default function AdvancedScreen() {
       latestEntryId,
       editingId,
       resetForm,
+      applyTutPreset,
+      startWithPreset,
+      isDarkMode,
       form.tut,
       form.load,
       form.sets,
@@ -1241,7 +1506,7 @@ export default function AdvancedScreen() {
     () => (
       <View style={styles.footerWrap}>
         <Text style={[styles.footerText, { color: t.mutedText }]}>
-          Stay tuned for upcoming features and updates.
+          Tip: use TUT logs for slow negatives, pauses, holds, tempo reps, and control work.
         </Text>
         <View style={{ height: 24 }} />
       </View>
@@ -1251,7 +1516,7 @@ export default function AdvancedScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: advancedBackground }]}>
         <ActivityIndicator color={t.primaryBg} />
       </SafeAreaView>
     );
@@ -1259,7 +1524,7 @@ export default function AdvancedScreen() {
 
   if (screenError) {
     return (
-      <SafeAreaView style={[styles.center, { backgroundColor: t.background }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: advancedBackground }]}>
         <Ionicons
           name="alert-circle-outline"
           size={28}
@@ -1281,9 +1546,51 @@ export default function AdvancedScreen() {
 
   return (
     <SafeAreaView
-      style={[styles.container, { backgroundColor: t.background }]}
+      style={[styles.container, { backgroundColor: advancedBackground }]}
       edges={["top"]}
     >
+      <View pointerEvents="none" style={styles.backgroundLayer}>
+        <Animated.View
+          style={[
+            styles.backgroundBubbleLarge,
+            {
+              backgroundColor: bubblePalette.primary,
+              transform: [
+                { translateX: bubbleOneX },
+                { translateY: bubbleOneY },
+                { scale: bubbleOneScale },
+              ],
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundBubbleMedium,
+            {
+              backgroundColor: bubblePalette.secondary,
+              transform: [
+                { translateX: bubbleTwoX },
+                { translateY: bubbleTwoY },
+                { scale: bubbleTwoScale },
+              ],
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.backgroundBubbleSmall,
+            {
+              backgroundColor: bubblePalette.third,
+              transform: [
+                { translateX: bubbleThreeX },
+                { translateY: bubbleThreeY },
+                { scale: bubbleThreeScale },
+              ],
+            },
+          ]}
+        />
+      </View>
+
       <View style={styles.screenHeader}>
         <Pressable
           onPress={handleGoBack}
@@ -1298,7 +1605,29 @@ export default function AdvancedScreen() {
           </Text>
         </View>
 
-        <View style={styles.screenHeaderSpacer} />
+        <View
+          style={[
+            styles.headerStatusChip,
+            { backgroundColor: t.card, borderColor: t.border },
+          ]}
+        >
+          <Ionicons
+            name={editingId ? "create-outline" : "time-outline"}
+            size={13}
+            color={editingId ? t.primaryBg : t.mutedText}
+          />
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.headerStatusText,
+              { color: editingId ? t.primaryBg : t.text },
+            ]}
+          >
+            {editingId
+              ? "Editing"
+              : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
+          </Text>
+        </View>
       </View>
 
       <KeyboardAvoidingView
@@ -1329,6 +1658,34 @@ export default function AdvancedScreen() {
 }
 
 const styles = StyleSheet.create({
+  backgroundLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: "hidden",
+  },
+  backgroundBubbleLarge: {
+    position: "absolute",
+    width: SCREEN_WIDTH * 0.92,
+    height: SCREEN_WIDTH * 0.92,
+    borderRadius: SCREEN_WIDTH,
+    top: -120,
+    right: -130,
+  },
+  backgroundBubbleMedium: {
+    position: "absolute",
+    width: SCREEN_WIDTH * 0.72,
+    height: SCREEN_WIDTH * 0.72,
+    borderRadius: SCREEN_WIDTH,
+    top: 330,
+    left: -150,
+  },
+  backgroundBubbleSmall: {
+    position: "absolute",
+    width: SCREEN_WIDTH * 0.58,
+    height: SCREEN_WIDTH * 0.58,
+    borderRadius: SCREEN_WIDTH,
+    bottom: 80,
+    right: -120,
+  },
   container: {
     flex: 1,
   },
@@ -1368,6 +1725,23 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "800",
     letterSpacing: -0.3,
+  },
+  headerStatusChip: {
+    minWidth: 72,
+    maxWidth: 104,
+    height: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  headerStatusText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: -0.08,
   },
   screenHeaderSpacer: {
     width: 40,
@@ -1543,6 +1917,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
+  bestTrendChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  bestTrendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  bestTrendText: {
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
   legendRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1612,8 +2004,36 @@ const styles = StyleSheet.create({
   formHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 12,
+    gap: 12,
+  },
+  formTitleWrap: {
+    flex: 1,
+  },
+  formSubtitle: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 4,
+    fontWeight: "600",
+  },
+  presetRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  presetChip: {
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  presetChipText: {
+    fontSize: 13,
+    fontWeight: "900",
   },
   clearText: {
     fontSize: 13,
@@ -1693,11 +2113,42 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 18,
   },
+  emptyPresetRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  emptyPresetButton: {
+    minHeight: 38,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyPresetText: {
+    fontSize: 13,
+    fontWeight: "800",
+  },
   entryCard: {
     borderWidth: 1,
     borderRadius: 18,
     padding: 14,
     marginBottom: 12,
+    overflow: "hidden",
+  },
+  entryCardFeatured: {
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  entryRail: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
   },
   entryTopRow: {
     flexDirection: "row",
@@ -1716,6 +2167,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontWeight: "500",
+  },
+  entryBadgeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  entryBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  entryBadgeText: {
+    fontSize: 11,
+    fontWeight: "800",
   },
   entryActions: {
     flexDirection: "row",
@@ -1794,4 +2264,3 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
-

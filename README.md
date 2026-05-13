@@ -25,48 +25,35 @@ The project includes a **web application, mobile application, CI pipeline, conta
 
 ---
 
-# Tech Stack
+## Tech Stack
 
-## Frontend
-- Next.js
-- React
-- Tailwind CSS
+Rest Assured is built as a full-stack fitness app with a web interface, mobile app, Supabase backend, and a simple DevOps workflow.
 
-## Mobile
-- React Native
-- Expo
-
-## Backend / Database
-- Supabase
-- PostgreSQL
-
-## DevOps
-- Docker
-- Docker Compose
-- GitHub Actions CI
-- GitHub Container Registry (GHCR)
-- Kubernetes (Minikube)
+| Area | Tools |
+|---|---|
+| **Web** | [![Next.js](https://img.shields.io/badge/Next.js-111827?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org/) [![React](https://img.shields.io/badge/React-111827?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/) [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-111827?style=for-the-badge&logo=tailwindcss&logoColor=06B6D4)](https://tailwindcss.com/) |
+| **Mobile** | [![React Native](https://img.shields.io/badge/React_Native-111827?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactnative.dev/) [![Expo](https://img.shields.io/badge/Expo-111827?style=for-the-badge&logo=expo&logoColor=white)](https://expo.dev/) |
+| **Backend** | [![Supabase](https://img.shields.io/badge/Supabase-111827?style=for-the-badge&logo=supabase&logoColor=3ECF8E)](https://supabase.com/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-111827?style=for-the-badge&logo=postgresql&logoColor=4169E1)](https://www.postgresql.org/) |
+| **DevOps** | [![Docker](https://img.shields.io/badge/Docker-111827?style=for-the-badge&logo=docker&logoColor=2496ED)](https://www.docker.com/) [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-111827?style=for-the-badge&logo=githubactions&logoColor=2088FF)](https://github.com/features/actions) [![Kubernetes](https://img.shields.io/badge/Kubernetes-111827?style=for-the-badge&logo=kubernetes&logoColor=326CE5)](https://kubernetes.io/) [![Minikube](https://img.shields.io/badge/Minikube-111827?style=for-the-badge&logo=kubernetes&logoColor=326CE5)](https://minikube.sigs.k8s.io/docs/) |
 
 ---
 
 # Architecture
 
-```
-Developer
-   ↓
-Git Push
-   ↓
-GitHub Actions (CI)
-   ↓
-Docker Image Build
-   ↓
-Push to GHCR
-   ↓
-Kubernetes Deployment
-   ↓
-Running Containers
-```
+```mermaid
+flowchart TD
+    Dev[Developer] --> Git[Git Push]
+    Git --> CI[GitHub Actions CI]
+    CI --> Build[Build Docker Image]
+    Build --> Registry[Push to GHCR]
+    Registry --> K8s[Kubernetes / Minikube]
+    K8s --> Pods[Running App Containers]
 
+    Web[Next.js Web App] --> Supabase[Supabase]
+    Mobile[React Native / Expo App] --> Supabase
+    Pods --> Supabase
+    Supabase --> DB[(PostgreSQL)]
+```
 ---
 
 # Repository Structure

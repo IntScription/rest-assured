@@ -31,8 +31,7 @@ export const metadata = {
   creator: "Rest Assured",
   openGraph: {
     title: "Rest Assured – Strength & Workout Log",
-    description:
-      "Train hard. Track smarter. Progress with confidence.",
+    description: "Train hard. Track smarter. Progress with confidence.",
     type: "website",
   },
 };
@@ -45,7 +44,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-black text-white`}
+        className={`${geistSans.variable} ${geistMono.variable} min-h-screen overflow-x-hidden bg-black text-white antialiased`}
       >
         {children}
       </body>

@@ -1,34 +1,49 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { getSupabaseClient } from "@/app/lib/supabase";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { supabase } from "@/app/lib/supabase";
 
 export default function NewExercisePage() {
-  const router = useRouter();
+  return (
+    <Suspense fallback={<PageLoader text="Loading exercise builder..." />}>
+      <NewExerciseContent />
+    </Suspense>
+  );
+}
 
-  const [supabase, setSupabase] = useState(null);
+function NewExerciseContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const requestedSplitId = searchParams.get("split");
+
   const [user, setUser] = useState(null);
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
+  const [activeProgram, setActiveProgram] = useState(null);
   const [splits, setSplits] = useState([]);
   const [selectedSplitId, setSelectedSplitId] = useState("");
-  const [loading, setLoading] = useState(false);
+
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+
   const [authLoading, setAuthLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  useEffect(() => {
-    const client = getSupabaseClient();
-    setSupabase(client);
-  }, []);
+  const selectedSplit = useMemo(() => {
+    return splits.find((split) => String(split.id) === String(selectedSplitId));
+  }, [splits, selectedSplitId]);
 
   useEffect(() => {
-    if (!supabase) return;
+    let mounted = true;
 
     async function checkAuth() {
       const { data } = await supabase.auth.getSession();
       const sessionUser = data?.session?.user ?? null;
+
+      if (!mounted) return;
 
       if (!sessionUser) {
         router.replace("/login");
@@ -40,37 +55,86 @@ export default function NewExercisePage() {
     }
 
     checkAuth();
-  }, [router, supabase]);
+
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
 
   useEffect(() => {
-    if (!user || !supabase) return;
+    if (!user) return;
 
-    const fetchUserSplits = async () => {
-      try {
-        const { data: program } = await supabase
-          .from("programs")
-          .select("id")
-          .eq("user_id", user.id)
-          .eq("is_active", true)
-          .maybeSingle();
+    let ignore = false;
 
-        if (!program) return;
+    async function fetchSetup() {
+      setPageLoading(true);
+      setErrorMsg("");
 
-        const { data: splitsData, error } = await supabase
-          .from("splits")
-          .select("id, name, order_index")
-          .eq("program_id", program.id)
-          .order("order_index", { ascending: true });
+      const { data: program, error: programError } = await supabase
+        .from("programs")
+        .select("id, name")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .maybeSingle();
 
-        if (error) throw error;
-        setSplits(splitsData || []);
-      } catch (err) {
-        console.error("Error fetching splits:", err);
+      if (ignore) return;
+
+      if (programError) {
+        console.error(programError);
+        setErrorMsg(programError.message);
+        setPageLoading(false);
+        return;
       }
-    };
 
-    fetchUserSplits();
-  }, [user, supabase]);
+      if (!program) {
+        setActiveProgram(null);
+        setSplits([]);
+        setSelectedSplitId("");
+        setPageLoading(false);
+        return;
+      }
+
+      const { data: splitData, error: splitsError } = await supabase
+        .from("splits")
+        .select("id, name, focus, order_index")
+        .eq("program_id", program.id)
+        .order("order_index", { ascending: true });
+
+      if (ignore) return;
+
+      if (splitsError) {
+        console.error(splitsError);
+        setErrorMsg(splitsError.message);
+        setPageLoading(false);
+        return;
+      }
+
+      const nextSplits = splitData || [];
+
+      setActiveProgram(program);
+      setSplits(nextSplits);
+
+      const requestedExists = nextSplits.some(
+        (split) => String(split.id) === String(requestedSplitId)
+      );
+
+      if (requestedSplitId && requestedExists) {
+        setSelectedSplitId(requestedSplitId);
+      } else if (nextSplits.length > 0) {
+        setSelectedSplitId(nextSplits[0].id);
+      } else {
+        setSelectedSplitId("");
+      }
+
+      setPageLoading(false);
+    }
+
+    fetchSetup();
+
+    return () => {
+      ignore = true;
+    };
+  }, [user, requestedSplitId]);
 
   function generateSlug(value) {
     return value
@@ -78,12 +142,35 @@ export default function NewExercisePage() {
       .trim()
       .replace(/\s+/g, "-")
       .replace(/[^a-z0-9-]/g, "")
-      .replace(/-+/g, "-");
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 
-  async function handleCreate(e) {
-    e.preventDefault();
-    if (loading || !supabase) return;
+  async function getAvailableSlug(baseSlug) {
+    let candidate = baseSlug;
+
+    for (let attempt = 1; attempt <= 20; attempt++) {
+      const { data, error } = await supabase
+        .from("exercises")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("slug", candidate)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) return candidate;
+
+      candidate = `${baseSlug}-${attempt + 1}`;
+    }
+
+    return `${baseSlug}-${Date.now().toString(36)}`;
+  }
+
+  async function handleCreate(event) {
+    event.preventDefault();
+
+    if (creating) return;
 
     const trimmedName = name.trim();
 
@@ -98,134 +185,256 @@ export default function NewExercisePage() {
     }
 
     if (!user) {
-      setErrorMsg("User not found.");
+      setErrorMsg("User not found. Please login again.");
       return;
     }
 
-    setLoading(true);
+    const baseSlug = generateSlug(trimmedName);
+
+    if (!baseSlug) {
+      setErrorMsg("Use at least one letter or number in the exercise name.");
+      return;
+    }
+
+    setCreating(true);
     setErrorMsg("");
 
-    const generatedSlug = generateSlug(trimmedName);
-
     try {
-      const { data: existing, error: existingError } = await supabase
-        .from("exercises")
-        .select("id, slug")
-        .eq("slug", generatedSlug)
-        .maybeSingle();
+      const availableSlug = await getAvailableSlug(baseSlug);
 
-      if (existingError) throw existingError;
-
-      if (existing) {
-        router.push(`/exercise/${existing.slug}`);
-        return;
-      }
-
-      const { data: newExercise, error: insertError } = await supabase
+      const { data: newExercise, error } = await supabase
         .from("exercises")
         .insert({
           name: trimmedName,
-          slug: generatedSlug,
+          slug: availableSlug,
           split_id: selectedSplitId,
           user_id: user.id,
         })
-        .select()
+        .select("id, slug")
         .single();
 
-      if (insertError) throw insertError;
+      if (error) throw error;
 
-      router.push(`/exercise/${newExercise.slug}`);
+      router.push(`/exercise/${newExercise.slug}?split=${selectedSplitId}`);
+      router.refresh();
     } catch (err) {
-      console.error("Error creating exercise:", err);
-      setErrorMsg(err.message || "Something went wrong.");
+      console.error("CREATE EXERCISE ERROR:", err);
+      setErrorMsg(err?.message || "Something went wrong while creating.");
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   }
 
-  if (authLoading || !supabase) {
+  if (authLoading || pageLoading) {
+    return <PageLoader text="Loading exercise builder..." />;
+  }
+
+  if (!activeProgram) {
     return (
-      <main className="min-h-screen bg-black text-white flex items-center justify-center">
-        Loading...
-      </main>
+      <SetupRequired
+        title="No Active Program"
+        message="Create or activate a training program before adding exercises."
+        buttonText="Open Training Setup"
+      />
+    );
+  }
+
+  if (!splits.length) {
+    return (
+      <SetupRequired
+        title="No Splits Found"
+        message="Add at least one split before creating exercises."
+        buttonText="Add Splits"
+      />
     );
   }
 
   return (
-    <main className="min-h-screen bg-black text-white px-4 py-6 flex justify-center">
-      <div className="w-full max-w-md space-y-6">
-        <button
-          onClick={() => {
-            if (window.history.length > 1) {
-              router.back();
-            } else {
-              router.replace("/");
-            }
-          }}
-          className="text-sm text-zinc-400 hover:text-white"
-        >
-          ← Back
-        </button>
-
-        <h1 className="text-3xl font-bold text-center">Create New Exercise</h1>
-
-        <div className="bg-zinc-900 p-6 rounded-3xl border border-zinc-800 shadow-lg space-y-4">
-          <label className="flex flex-col text-sm">
-            Exercise Name
-            <input
-              type="text"
-              placeholder="Enter exercise name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setSlug(generateSlug(e.target.value));
-              }}
-              className="mt-1 p-3 rounded-xl bg-zinc-800 border border-zinc-700 focus:border-white focus:outline-none"
-            />
-          </label>
-
-          {slug && (
-            <div className="inline-block text-xs px-2 py-1 rounded-full bg-zinc-700 text-zinc-300">
-              Slug: {slug}
-            </div>
-          )}
-
-          <label className="flex flex-col text-sm">
-            Split
-            <select
-              value={selectedSplitId}
-              onChange={(e) => setSelectedSplitId(e.target.value)}
-              className="mt-1 p-3 rounded-xl bg-zinc-800 border border-zinc-700 focus:border-white focus:outline-none"
-            >
-              <option value="">Select Split</option>
-              {splits.map((split) => (
-                <option key={split.id} value={split.id}>
-                  {split.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {splits.length === 0 && (
-            <p className="text-zinc-500 text-sm">
-              No splits found. Create a split first in your{" "}
-              <Link href="/profile" className="underline text-white">
-                profile
-              </Link>.
-            </p>
-          )}
-
-          {errorMsg && <p className="text-red-500 text-sm">{errorMsg}</p>}
-
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,#1f2937_0%,#09090b_45%,#000_100%)] px-4 py-8 text-white">
+      <div className="mx-auto w-full max-w-6xl space-y-8">
+        <div className="flex items-center justify-between gap-4">
           <button
-            type="submit"
-            onClick={handleCreate}
-            disabled={loading}
-            className="w-full bg-white text-black py-3 rounded-xl font-semibold hover:bg-gray-200 disabled:opacity-50 transition"
+            onClick={() => router.back()}
+            className="rounded-full border border-white/10 bg-white/4 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-white"
           >
-            {loading ? "Creating..." : "Create Exercise"}
+            ← Back
           </button>
+
+          <Link
+            href="/profile"
+            className="rounded-full border border-white/10 bg-white/4 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-white"
+          >
+            Training Setup
+          </Link>
         </div>
+
+        <section className="rounded-4xl border border-white/10 bg-linear-to-br from-white/8 to-white/2 p-6 shadow-2xl shadow-black/40 sm:p-8">
+          <p className="text-sm uppercase tracking-[0.3em] text-emerald-400">
+            Add Exercise
+          </p>
+
+          <div className="mt-3 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+            <div>
+              <h1 className="text-4xl font-black tracking-tight sm:text-5xl">
+                Build Your Split
+              </h1>
+
+              <p className="mt-3 max-w-2xl text-sm text-zinc-400">
+                Add a movement to your active program and start tracking load,
+                reps, sets, and volume.
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-black/30 p-4">
+              <p className="text-xs uppercase tracking-wide text-zinc-500">
+                Active Program
+              </p>
+
+              <p className="mt-1 text-xl font-black">{activeProgram.name}</p>
+            </div>
+          </div>
+        </section>
+
+        <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+          <section className="rounded-4xl border border-white/10 bg-white/4 p-5 shadow-2xl shadow-black/30 backdrop-blur sm:p-6">
+            <p className="text-sm uppercase tracking-[0.25em] text-emerald-400">
+              Choose Split
+            </p>
+
+            <h2 className="mt-2 text-2xl font-black">Where does it belong?</h2>
+
+            <p className="mt-1 text-sm text-zinc-500">
+              The split from the dashboard is pre-selected automatically.
+            </p>
+
+            <div className="mt-5 grid gap-3">
+              {splits.map((split) => {
+                const isSelected = String(selectedSplitId) === String(split.id);
+
+                return (
+                  <button
+                    key={split.id}
+                    type="button"
+                    onClick={() => setSelectedSplitId(split.id)}
+                    className={`rounded-3xl border p-4 text-left transition ${isSelected
+                        ? "border-emerald-400/40 bg-emerald-400/10"
+                        : "border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/6"
+                      }`}
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="font-bold">{split.name}</p>
+
+                        <p className="mt-1 text-xs text-zinc-500">
+                          {split.focus || "No focus added"}
+                        </p>
+                      </div>
+
+                      {isSelected && (
+                        <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <form
+            onSubmit={handleCreate}
+            className="rounded-4xl border border-white/10 bg-white/4 p-5 shadow-2xl shadow-black/30 backdrop-blur sm:p-6"
+          >
+            <p className="text-sm uppercase tracking-[0.25em] text-emerald-400">
+              New Movement
+            </p>
+
+            <h2 className="mt-2 text-2xl font-black">Exercise Details</h2>
+
+            <div className="mt-5 space-y-5">
+              <label className="block text-sm font-medium text-zinc-300">
+                Exercise Name
+                <input
+                  type="text"
+                  placeholder="e.g. Weighted Pull Ups"
+                  value={name}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setName(value);
+                    setSlug(generateSlug(value));
+                    setErrorMsg("");
+                  }}
+                  className="mt-2 min-h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60"
+                  required
+                />
+              </label>
+
+              <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">
+                  Preview
+                </p>
+
+                <p className="mt-2 text-lg font-bold">
+                  {name.trim() || "Exercise name"}
+                </p>
+
+                <p className="mt-1 break-all text-sm text-zinc-500">
+                  {selectedSplit
+                    ? `${selectedSplit.name} · /exercise/${slug || "your-slug"}`
+                    : `/exercise/${slug || "your-slug"}`}
+                </p>
+              </div>
+
+              {errorMsg && (
+                <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                  {errorMsg}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={creating || !name.trim() || !selectedSplitId}
+                className="min-h-12 w-full rounded-2xl bg-white px-5 font-bold text-black transition hover:scale-[1.01] hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creating ? "Creating..." : "Create Exercise →"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function PageLoader({ text }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-black text-white">
+      <div className="rounded-3xl border border-white/10 bg-white/4 px-6 py-4 text-sm text-zinc-300">
+        {text}
+      </div>
+    </main>
+  );
+}
+
+function SetupRequired({ title, message, buttonText }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,#1f2937_0%,#09090b_45%,#000_100%)] px-4 text-white">
+      <div className="w-full max-w-md rounded-4xl border border-white/10 bg-white/4 p-6 text-center shadow-2xl shadow-black/40">
+        <p className="text-sm uppercase tracking-[0.3em] text-emerald-400">
+          Rest Assured
+        </p>
+
+        <h1 className="mt-3 text-3xl font-black tracking-tight">{title}</h1>
+
+        <p className="mt-3 text-sm text-zinc-400">{message}</p>
+
+        <Link
+          href="/profile"
+          className="mt-6 inline-flex rounded-2xl bg-white px-5 py-3 font-bold text-black transition hover:scale-[1.01] hover:bg-zinc-200"
+        >
+          {buttonText}
+        </Link>
       </div>
     </main>
   );

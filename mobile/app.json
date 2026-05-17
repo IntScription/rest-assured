@@ -55,7 +55,8 @@
           "healthSharePermission": "Rest Assured reads Apple Health data to improve coaching accuracy.",
           "healthUpdatePermission": "Rest Assured writes workout data when needed."
         }
-      ]
+      ],
+      "expo-build-properties"
     ],
     "experiments": {
       "typedRoutes": true,

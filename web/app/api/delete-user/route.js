@@ -1,26 +1,48 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+
+function getAdminClient() {
+  const supabaseUrl =
+    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Missing Supabase server environment variables.");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+async function deleteStep(query, label) {
+  const { error } = await query;
+
+  if (error) {
+    throw new Error(`${label}: ${error.message}`);
+  }
+}
+
 export async function POST(req) {
   try {
-    const supabaseUrl =
-      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const authHeader = req.headers.get("authorization") || "";
 
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        { error: "Missing Supabase server environment variables" },
-        { status: 500 }
-      );
+    if (!authHeader.startsWith("Bearer ")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
-
-    const token = req.headers.get("authorization")?.replace("Bearer ", "");
+    const token = authHeader.replace("Bearer ", "").trim();
 
     if (!token) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const supabaseAdmin = getAdminClient();
 
     const {
       data: { user },
@@ -33,44 +55,71 @@ export async function POST(req) {
 
     const userId = user.id;
 
-    await supabaseAdmin.from("logs").delete().eq("user_id", userId);
-    await supabaseAdmin.from("workout_sessions").delete().eq("user_id", userId);
-    await supabaseAdmin.from("exercises").delete().eq("user_id", userId);
+    await deleteStep(
+      supabaseAdmin.from("logs").delete().eq("user_id", userId),
+      "Failed to delete logs"
+    );
 
-    const { data: programs } = await supabaseAdmin
+    await deleteStep(
+      supabaseAdmin
+        .from("workout_sessions")
+        .delete()
+        .eq("user_id", userId),
+      "Failed to delete workout sessions"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("exercises").delete().eq("user_id", userId),
+      "Failed to delete exercises"
+    );
+
+    const { data: programs, error: programFetchError } = await supabaseAdmin
       .from("programs")
       .select("id")
       .eq("user_id", userId);
 
-    if (programs && programs.length > 0) {
-      const programIds = programs.map((p) => p.id);
-
-      await supabaseAdmin
-        .from("splits")
-        .delete()
-        .in("program_id", programIds);
+    if (programFetchError) {
+      throw new Error(`Failed to fetch programs: ${programFetchError.message}`);
     }
 
-    await supabaseAdmin.from("programs").delete().eq("user_id", userId);
-    await supabaseAdmin.from("profiles").delete().eq("id", userId);
+    const programIds = programs?.map((program) => program.id) || [];
 
-    const { error: deleteError } =
+    if (programIds.length > 0) {
+      await deleteStep(
+        supabaseAdmin.from("splits").delete().in("program_id", programIds),
+        "Failed to delete splits"
+      );
+    }
+
+    await deleteStep(
+      supabaseAdmin.from("programs").delete().eq("user_id", userId),
+      "Failed to delete programs"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("profiles").delete().eq("id", userId),
+      "Failed to delete profile"
+    );
+
+    const { error: deleteAuthError } =
       await supabaseAdmin.auth.admin.deleteUser(userId);
 
-    if (deleteError) {
+    if (deleteAuthError) {
       return NextResponse.json(
-        { error: deleteError.message },
+        { error: deleteAuthError.message },
         { status: 400 }
       );
     }
 
     return NextResponse.json(
-      { message: "Account deleted successfully" },
+      { message: "Account deleted successfully." },
       { status: 200 }
     );
   } catch (err) {
+    console.error("DELETE USER ERROR:", err);
+
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: err?.message || "Internal server error." },
       { status: 500 }
     );
   }

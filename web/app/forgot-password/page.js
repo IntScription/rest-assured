@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/app/lib/supabase";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function ForgotPassword() {
   const router = useRouter();
@@ -13,11 +14,11 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
-  // Simple email validation
-  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const cleanEmail = email.trim().toLowerCase();
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
 
-  async function handleReset(e) {
-    e.preventDefault();
+  async function handleReset(event) {
+    event.preventDefault();
 
     if (cooldown > 0 || loading || !isValidEmail) return;
 
@@ -25,15 +26,10 @@ export default function ForgotPassword() {
     setError("");
     setMessage("");
 
-    const cleanEmail = email.trim().toLowerCase();
-
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(
-        cleanEmail,
-        {
-          redirectTo: `${window.location.origin}/reset-password`,
-        }
-      );
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
 
       if (error) {
         if (error.status === 429) {
@@ -41,6 +37,7 @@ export default function ForgotPassword() {
         } else {
           setError(error.message || "Failed to send reset link.");
         }
+
         setLoading(false);
         return;
       }
@@ -48,12 +45,6 @@ export default function ForgotPassword() {
       setMessage("If this email exists, a reset link has been sent.");
       setCooldown(90);
       setLoading(false);
-
-      // Auto redirect after success
-      setTimeout(() => {
-        router.push("/login");
-      }, 4000);
-
     } catch (err) {
       console.log("RESET ERROR:", err);
       setError("Network error. Please try again.");
@@ -61,7 +52,6 @@ export default function ForgotPassword() {
     }
   }
 
-  // Clean cooldown countdown (no interval stacking)
   useEffect(() => {
     if (cooldown <= 0) return;
 
@@ -73,61 +63,95 @@ export default function ForgotPassword() {
   }, [cooldown]);
 
   return (
-    <main className="min-h-screen bg-black text-white flex items-center justify-center relative px-4">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,#1f2937_0%,#09090b_45%,#000_100%)] px-4 py-8 text-white">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center">
+        <section className="w-full rounded-4xl border border-white/10 bg-white/4 p-6 shadow-2xl shadow-black/40 backdrop-blur sm:p-8">
+          <button
+            onClick={() => router.push("/login")}
+            className="rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-white"
+          >
+            ← Back to Login
+          </button>
 
-      {/* Back Button */}
-      <button
-        onClick={() => router.push("/login")}
-        className="absolute top-6 right-6 text-sm text-gray-400 hover:text-white transition"
-      >
-        Back
-      </button>
+          <div className="mt-8 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl border border-emerald-400/20 bg-emerald-400/10 text-2xl font-black text-emerald-300">
+              ?
+            </div>
 
-      <form
-        onSubmit={handleReset}
-        className="bg-zinc-900 p-8 rounded-2xl w-full max-w-md space-y-5 shadow-xl"
-      >
-        <h1 className="text-2xl font-bold text-center">
-          Forgot Password
-        </h1>
+            <p className="mt-5 text-sm uppercase tracking-[0.3em] text-emerald-400">
+              Account Recovery
+            </p>
 
-        <p className="text-sm text-gray-400 text-center">
-          Enter your account email and we’ll send you a reset link.
-        </p>
+            <h1 className="mt-3 text-4xl font-black tracking-tight">
+              Forgot Password
+            </h1>
 
-        <input
-          type="email"
-          placeholder="Enter your email"
-          className="w-full p-3 rounded-lg bg-zinc-800 border border-zinc-700 focus:border-white outline-none transition"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              Enter your account email and we’ll send you a secure reset link.
+            </p>
+          </div>
 
-        <button
-          type="submit"
-          disabled={loading || cooldown > 0 || !isValidEmail}
-          className="w-full bg-white text-black p-3 rounded-lg font-semibold disabled:opacity-50 transition"
-        >
-          {loading
-            ? "Sending..."
-            : message
-              ? "Email Sent ✓"
-              : cooldown > 0
-                ? `Wait ${cooldown}s`
-                : "Send Reset Link"}
-        </button>
+          <form onSubmit={handleReset} className="mt-8 space-y-5">
+            <label className="block text-sm font-medium text-zinc-300">
+              Email
+              <input
+                type="email"
+                placeholder="you@example.com"
+                className="mt-2 min-h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60"
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setError("");
+                  setMessage("");
+                }}
+                required
+              />
+            </label>
 
-        {error && (
-          <p className="text-red-500 text-sm text-center">{error}</p>
-        )}
+            {!isValidEmail && email && (
+              <p className="text-sm text-zinc-500">
+                Enter a valid email address.
+              </p>
+            )}
 
-        {message && (
-          <p className="text-green-500 text-sm text-center">
-            {message} Redirecting to login...
-          </p>
-        )}
-      </form>
+            {error && (
+              <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                {error}
+              </div>
+            )}
+
+            {message && (
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-300">
+                {message}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || cooldown > 0 || !isValidEmail}
+              className="min-h-12 w-full rounded-2xl bg-white px-5 font-bold text-black transition hover:scale-[1.01] hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading
+                ? "Sending..."
+                : cooldown > 0
+                  ? `Wait ${cooldown}s`
+                  : message
+                    ? "Send Again"
+                    : "Send Reset Link →"}
+            </button>
+
+            <p className="border-t border-white/10 pt-5 text-center text-sm text-zinc-500">
+              Remembered it?{" "}
+              <Link
+                href="/login"
+                className="font-semibold text-white underline decoration-white/30 underline-offset-4 hover:decoration-white"
+              >
+                Login
+              </Link>
+            </p>
+          </form>
+        </section>
+      </div>
     </main>
   );
 }

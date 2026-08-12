@@ -457,7 +457,7 @@ export const SplitPage = memo(
                 <RNAnimated.View
                   pointerEvents="none"
                   style={[
-                    StyleSheet.absoluteFillObject,
+                    StyleSheet.absoluteFill,
                     {
                       margin: 16,
                       borderWidth: 2,

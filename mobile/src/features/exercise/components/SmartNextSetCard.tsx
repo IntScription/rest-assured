@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { SuggestionAction, ThemeLike } from "../types";
@@ -13,7 +13,7 @@ type Props = {
   bestLabel: string;
 };
 
-export default function SmartNextSetCard({
+function SmartNextSetCard({
   t,
   insight,
   suggestionActions,
@@ -90,6 +90,8 @@ export default function SmartNextSetCard({
     </View>
   );
 }
+
+export default memo(SmartNextSetCard);
 
 const styles = StyleSheet.create({
   card: {

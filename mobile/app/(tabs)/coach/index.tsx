@@ -14,8 +14,7 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { useFocusEffect } from "@react-navigation/native";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { supabase } from "@/src/lib/supabase";
@@ -31,6 +30,12 @@ import {
   getCoachRuntimeMode,
 } from "@/src/features/coach/services/coach-runtime";
 import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
+import { MonthlyReviewSheet } from "@/src/features/monthly-review/components/MonthlyReviewSheet";
+import { buildMonthlyReview, saveMonthlyReview } from "@/src/features/monthly-review/lib/buildMonthlyReview";
+import { useLocalMonthlyReview } from "@/src/features/monthly-review/hooks/useLocalMonthlyReview";
+import type { MonthlyAiFeedback } from "@/src/features/monthly-review/lib/monthlyReviewTypes";
+import type { MonthlyTrainingStats } from "@/src/features/training-intelligence/types";
+import { getEdgeFunctionErrorMessage } from "@/src/lib/edgeFunctionError";
 
 type ThemeLike = ReturnType<typeof useAppTheme>;
 
@@ -71,6 +76,12 @@ export default function CoachScreen() {
   const localCoach = useLocalCoach();
   const runtimeMode = getCoachRuntimeMode();
   const { loading: syncingHealth, syncNow, lastSnapshot } = useAppleHealthSync();
+
+  const [monthlyReviewVisible, setMonthlyReviewVisible] = useState(false);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+  const [monthlyStats, setMonthlyStats] = useState<MonthlyTrainingStats | null>(null);
+  const [monthlyAiFeedback, setMonthlyAiFeedback] = useState<MonthlyAiFeedback | null>(null);
+  const localMonthlyReview = useLocalMonthlyReview();
 
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const backgroundFloatA = useRef(new Animated.Value(0)).current;
@@ -228,7 +239,15 @@ export default function CoachScreen() {
   useFocusEffect(
     useCallback(() => {
       void refetch();
-    }, [refetch])
+
+      if (userId) {
+        void generateCoachInsights(userId)
+          .then(() => refetch({ silent: true }))
+          .catch(() => {
+            // Insight generation is best-effort; the tab already shows whatever was last generated.
+          });
+      }
+    }, [refetch, userId])
   );
 
   const canUseLocal =
@@ -270,6 +289,95 @@ export default function CoachScreen() {
     loop.start();
     return () => loop.stop();
   }, [pulseAnim, aiColor]);
+
+  const handleOpenMonthlyReview = async () => {
+    if (!userId) return;
+
+    setMonthlyReviewVisible(true);
+    setMonthlyLoading(true);
+
+    try {
+      const monthDate = new Date().toISOString().slice(0, 10);
+      const stats = await buildMonthlyReview({ userId, monthDate });
+      setMonthlyStats(stats);
+
+      // `stats.month` is "YYYY-MM" (used internally for date-prefix
+      // matching); the `review_month` column is a Postgres `date`, so it
+      // needs the full first-of-month date.
+      const reviewMonth = `${stats.month}-01`;
+
+      const { data: existing } = await supabase
+        .from("monthly_training_reviews")
+        .select("ai_feedback")
+        .eq("user_id", userId)
+        .is("program_id", null)
+        .eq("review_month", reviewMonth)
+        .maybeSingle();
+
+      const existingFeedback = (existing?.ai_feedback as MonthlyAiFeedback | null) ?? null;
+      setMonthlyAiFeedback(existingFeedback);
+
+      // Re-save with the freshly computed stats while preserving any
+      // previously generated AI feedback for this month (saveMonthlyReview
+      // upserts the full row, so omitting aiFeedback here would wipe it).
+      await saveMonthlyReview({
+        userId,
+        reviewMonth,
+        stats,
+        aiFeedback: existingFeedback,
+      });
+    } catch (error: any) {
+      Alert.alert("Monthly review failed", error?.message ?? "Could not build your monthly review.");
+      setMonthlyReviewVisible(false);
+    } finally {
+      setMonthlyLoading(false);
+    }
+  };
+
+  const handleGenerateMonthlyAiFeedback = async () => {
+    if (!userId || !monthlyStats) return;
+
+    try {
+      let feedback: MonthlyAiFeedback | null = null;
+
+      // Prefer on-device Apple Intelligence when available, same precedence
+      // Ask Coach uses — falls through to the hosted edge function on any
+      // local failure (model not downloaded, unavailable on this device, etc).
+      if (localMonthlyReview.isAvailable) {
+        try {
+          feedback = await localMonthlyReview.generate(monthlyStats);
+        } catch {
+          feedback = null;
+        }
+      }
+
+      if (!feedback) {
+        const { data, error } = await supabase.functions.invoke("monthly-training-review", {
+          body: { stats: monthlyStats },
+        });
+
+        if (error) {
+          throw new Error(
+            await getEdgeFunctionErrorMessage(error, "monthly-training-review failed")
+          );
+        }
+
+        feedback = (data as { feedback?: MonthlyAiFeedback } | null)?.feedback ?? null;
+      }
+
+      if (!feedback) throw new Error("No feedback returned.");
+
+      setMonthlyAiFeedback(feedback);
+      await saveMonthlyReview({
+        userId,
+        reviewMonth: `${monthlyStats.month}-01`,
+        stats: monthlyStats,
+        aiFeedback: feedback,
+      });
+    } catch (error: any) {
+      Alert.alert("AI feedback failed", error?.message ?? "Could not generate AI feedback.");
+    }
+  };
 
   const handleHealthSync = async () => {
     if (!userId) return;
@@ -617,6 +725,44 @@ export default function CoachScreen() {
           t={t}
         />
 
+        <View
+          style={[
+            styles.healthCard,
+            {
+              backgroundColor: t.card,
+              borderColor: t.border,
+              marginBottom: 20,
+            },
+          ]}
+        >
+          <View style={styles.healthTop}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.healthTitle, { color: t.text }]}>
+                Monthly review
+              </Text>
+              <Text style={[styles.healthText, { color: t.mutedText }]}>
+                See this month&apos;s training stats and get AI feedback on your progress.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.syncButton,
+                {
+                  backgroundColor: t.primaryBg,
+                  opacity: monthlyLoading ? 0.75 : 1,
+                },
+              ]}
+              onPress={handleOpenMonthlyReview}
+              disabled={monthlyLoading}
+            >
+              <Text style={[styles.syncButtonText, { color: t.primaryText }]}>
+                {monthlyLoading ? "Loading..." : "View"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         <SectionHeader title="Apple Health" t={t} />
 
         <View
@@ -684,6 +830,16 @@ export default function CoachScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <MonthlyReviewSheet
+        visible={monthlyReviewVisible}
+        t={t}
+        stats={monthlyStats}
+        aiFeedback={monthlyAiFeedback}
+        loading={monthlyLoading}
+        onClose={() => setMonthlyReviewVisible(false)}
+        onGenerateAiFeedback={handleGenerateMonthlyAiFeedback}
+      />
     </SafeAreaView>
   );
 }
@@ -851,7 +1007,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   backgroundGlow: {
     position: "absolute",

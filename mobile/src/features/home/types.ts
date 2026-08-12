@@ -8,6 +8,7 @@ export type Program = {
   name: string;
   is_active: boolean | null;
   created_at: string | null;
+  schedule_anchor_date: string;
 };
 
 export type SplitLite = {

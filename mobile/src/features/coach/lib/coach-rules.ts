@@ -3,6 +3,13 @@ import type {
   CoachProfileRow,
   RecoveryCheckinRow,
 } from "@/src/features/coach/types/coach";
+import type { LogRow, PrFlags } from "@/src/features/exercise/types";
+import { detectPlateau } from "@/src/features/exercise/utils/plateauDetection";
+import { getPrFlags } from "@/src/features/exercise/utils/prLogic";
+import type { SkillLog, SkillMetricType } from "@/src/features/skills/types";
+import { getSkillBestLog, getSkillPrFlags } from "@/src/features/skills/utils/skill-pr";
+import { getNextSetSuggestion } from "@/src/features/training-intelligence/nextSetSuggestion";
+import { getRecoveryWarnings } from "@/src/features/training-intelligence/recoveryRules";
 
 type WorkoutLogLite = {
   id: string;
@@ -10,6 +17,9 @@ type WorkoutLogLite = {
   weight: number | null;
   reps: number;
   sets: number;
+  volume?: number | null;
+  rpe?: number | null;
+  type?: string | null;
   created_at: string | null;
   exercise_name?: string;
 };
@@ -18,13 +28,7 @@ type WorkoutSessionLite = {
   id: string;
   workout_date: string;
   completed_at: string | null;
-};
-
-type SkillLogLite = {
-  skill_id: string;
-  value: number | null;
-  unit: string | null;
-  logged_at: string;
+  status?: string | null;
 };
 
 type UserSkillLite = {
@@ -36,6 +40,7 @@ type UserSkillLite = {
     name: string;
     category: string;
     difficulty: string;
+    metric_type: SkillMetricType;
   } | null;
 };
 
@@ -88,6 +93,8 @@ export function calculateReadinessScore(input: {
   recovery: RecoveryCheckinRow | null;
   health: HealthSyncDailyLite | null;
   weeklySessions: WorkoutSessionLite[];
+  recentLogs?: WorkoutLogLite[];
+  sessions?: WorkoutSessionLite[];
 }): { score: number; status: "ready" | "moderate" | "recover"; reasons: string[] } {
   const { weeklySessions } = input;
   const recovery = getEffectiveRecovery({
@@ -146,6 +153,17 @@ export function calculateReadinessScore(input: {
     reasons.push("training frequency this week is high");
   }
 
+  // Adherence/recovery warnings from the wider (30-day) log and session
+  // history — days since last workout, 3-days-in-a-row, and high RPE count.
+  // See training-intelligence/recoveryRules.ts.
+  if (input.recentLogs && input.sessions) {
+    const warnings = getRecoveryWarnings({ logs: input.recentLogs, sessions: input.sessions });
+    for (const warning of warnings) {
+      score -= 6;
+      reasons.push(warning);
+    }
+  }
+
   if (score >= 75) return { score, status: "ready", reasons };
   if (score >= 55) return { score, status: "moderate", reasons };
   return { score, status: "recover", reasons };
@@ -156,6 +174,8 @@ export function buildReadinessInsight(params: {
   recovery: RecoveryCheckinRow | null;
   health: HealthSyncDailyLite | null;
   weeklySessions: WorkoutSessionLite[];
+  recentLogs?: WorkoutLogLite[];
+  sessions?: WorkoutSessionLite[];
 }): Omit<CoachInsightRow, "id" | "created_at"> {
   const result = calculateReadinessScore(params);
 
@@ -190,6 +210,21 @@ function getMostRelevantWeightedLog(logs: WorkoutLogLite[]) {
   return logs.find((log) => typeof log.weight === "number" && log.weight > 0);
 }
 
+function toLogRow(userId: string, log: WorkoutLogLite): LogRow {
+  return {
+    id: log.id,
+    user_id: userId,
+    exercise_id: log.exercise_id,
+    weight: log.weight,
+    reps: log.reps,
+    sets: log.sets,
+    volume: log.volume ?? null,
+    created_at: log.created_at,
+    type: log.type ?? null,
+    rpe: log.rpe ?? null,
+  };
+}
+
 export function buildNextSessionInsight(params: {
   userId: string;
   profile: CoachProfileRow | null;
@@ -205,13 +240,26 @@ export function buildNextSessionInsight(params: {
   };
 
   if (latestWeightedLog) {
-    const nextWeight = Number(latestWeightedLog.weight) + 2.5;
-    const reps = latestWeightedLog.reps;
-    const canProgress = reps >= 8;
+    const exerciseHistory: LogRow[] = params.recentLogs
+      .filter((log) => log.exercise_id === latestWeightedLog.exercise_id)
+      .map((log) => toLogRow(params.userId, log));
 
-    summary = canProgress
-      ? `You may be ready for a small progression next session if recovery feels good.`
-      : `Keep the current load or add reps before increasing weight.`;
+    const prFlags: Record<string, PrFlags> = getPrFlags(exerciseHistory);
+    const plateau = detectPlateau(exerciseHistory, prFlags);
+    const suggestion = getNextSetSuggestion(exerciseHistory);
+
+    const latestFlags = prFlags[latestWeightedLog.id];
+    const isRecentPr = Boolean(latestFlags?.heaviest || latestFlags?.volume);
+
+    const sentences = [suggestion.suggestion];
+    if (isRecentPr) {
+      sentences.push("Your last set here was a new PR — nice work.");
+    }
+    if (plateau.isPlateaued) {
+      sentences.push(plateau.message);
+    }
+
+    summary = sentences.join(" ");
 
     payload = {
       next_split_name: params.nextSplitName,
@@ -222,16 +270,12 @@ export function buildNextSessionInsight(params: {
         reps: latestWeightedLog.reps,
         sets: latestWeightedLog.sets,
       },
-      suggested_progression: canProgress
-        ? {
-          strategy: "increase_load",
-          add_weight_kg: 2.5,
-          trial_weight_kg: nextWeight,
-        }
-        : {
-          strategy: "hold_load_add_reps",
-          target_reps: reps + 1,
-        },
+      focus_exercise_id: latestWeightedLog.exercise_id,
+      focus_exercise_name: latestWeightedLog.exercise_name ?? "Exercise",
+      suggestion_title: suggestion.title,
+      tone: suggestion.tone,
+      is_plateaued: plateau.isPlateaued,
+      is_recent_pr: isRecentPr,
     };
   }
 
@@ -277,10 +321,17 @@ export function buildWeeklyReviewInsight(params: {
   };
 }
 
+function formatSkillValue(log: SkillLog, metricType: SkillMetricType): string | null {
+  if (metricType === "seconds") return `${log.value ?? 0}${log.unit ?? "s"}`;
+  if (metricType === "reps") return `${log.value ?? 0} reps`;
+  if (metricType === "attempts") return `${log.attempts ?? 0} attempts`;
+  return null;
+}
+
 export function buildSkillFocusInsight(params: {
   userId: string;
   userSkills: UserSkillLite[];
-  skillLogs: SkillLogLite[];
+  skillLogs: SkillLog[];
 }): Omit<CoachInsightRow, "id" | "created_at"> {
   const latestSkillLog = params.skillLogs[0] ?? null;
   const activeSkill =
@@ -289,12 +340,31 @@ export function buildSkillFocusInsight(params: {
     null;
 
   const skillName = activeSkill?.skills?.name ?? "Skill practice";
+  const metricType = activeSkill?.skills?.metric_type ?? null;
 
-  const summary = latestSkillLog
-    ? `Keep pushing ${skillName}. Stay consistent and aim to improve control or output on your next practice.`
-    : activeSkill
-      ? `You have ${skillName} active. Log it consistently so Coach can guide progression better.`
-      : "Start tracking a skill so Coach can suggest a focused progression target.";
+  let summary: string;
+  let bestLog: SkillLog | null = null;
+  let isNewBest = false;
+
+  if (latestSkillLog && activeSkill && metricType) {
+    const skillLogsForSkill = params.skillLogs.filter((log) => log.skill_id === activeSkill.skill_id);
+    bestLog = getSkillBestLog(skillLogsForSkill, metricType);
+    const flags = getSkillPrFlags(skillLogsForSkill, metricType);
+    isNewBest = Boolean(flags[latestSkillLog.id]);
+
+    const bestValueLabel = bestLog ? formatSkillValue(bestLog, metricType) : null;
+
+    summary =
+      isNewBest && bestValueLabel
+        ? `New personal best on ${skillName}: ${bestValueLabel}. Keep building on it.`
+        : bestValueLabel
+          ? `Keep pushing ${skillName}. Best so far: ${bestValueLabel}.`
+          : `Keep pushing ${skillName}. Stay consistent and aim to improve control or output on your next practice.`;
+  } else if (activeSkill) {
+    summary = `You have ${skillName} active. Log it consistently so Coach can guide progression better.`;
+  } else {
+    summary = "Start tracking a skill so Coach can suggest a focused progression target.";
+  }
 
   return {
     user_id: params.userId,
@@ -305,6 +375,8 @@ export function buildSkillFocusInsight(params: {
       skill_name: skillName,
       active_skill_id: activeSkill?.skill_id ?? null,
       last_skill_log_at: latestSkillLog?.logged_at ?? null,
+      is_new_best: isNewBest,
+      best_value: bestLog?.value ?? null,
     },
     source: "rule_engine",
     model_name: null,

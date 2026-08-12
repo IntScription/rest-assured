@@ -47,12 +47,9 @@ function getPrLabel(latest: LatestLogLite, logs: LatestLogLite[]) {
   const latestVolume = volumeOf(latest);
   const bestWeight = Math.max(0, ...logs.map((log) => toNumber(log.weight)));
   const bestVolume = Math.max(0, ...logs.map(volumeOf));
-  const bestBodyweightReps = Math.max(
-    0,
-    ...logs.filter((log) => toNumber(log.weight) <= 0).map((log) => toNumber(log.reps))
-  );
+  const bestReps = Math.max(0, ...logs.map((log) => toNumber(log.reps)));
   if (latestWeight > 0 && latestWeight >= bestWeight && bestWeight > 0) return "Weight PR";
-  if (latestWeight <= 0 && latestReps >= bestBodyweightReps && bestBodyweightReps > 0) return "Rep PR";
+  if (latestReps >= bestReps && bestReps > 0) return "Rep PR";
   if (latestVolume >= bestVolume && bestVolume > 0) return "Volume PR";
   return null;
 }

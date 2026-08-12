@@ -447,7 +447,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   keyboardWrap: {
     flex: 1,
@@ -522,7 +522,7 @@ const styles = StyleSheet.create({
   },
 
   gridWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.58,
     transform: [{ rotate: "-9deg" }],
   },

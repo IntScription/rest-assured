@@ -1,7 +1,8 @@
 import { supabase } from "@/src/lib/supabase";
+import { logWarn } from "@/src/lib/logger";
 import { STORAGE_KEYS } from "./storage-keys";
 import { readJson, writeJson } from "./storage";
-import { getPendingActions, setPendingActions } from "./queue";
+import { getPendingActions, setPendingActions, MAX_SYNC_RETRIES } from "./queue";
 import type { PendingAction, SyncMeta } from "./types";
 
 const DEFAULT_SYNC_META: SyncMeta = {
@@ -34,6 +35,12 @@ export async function flushPendingActions() {
   const remaining: PendingAction[] = [];
 
   for (const action of actions) {
+    if (action.retries >= MAX_SYNC_RETRIES) {
+      // Keep the data, stop hammering a request that's failed this many times.
+      remaining.push(action);
+      continue;
+    }
+
     try {
       switch (action.type) {
         case "profile.setCurrentProgram": {
@@ -138,7 +145,10 @@ export async function flushPendingActions() {
         }
 
         case "log.create": {
-          const { error } = await supabase.from("logs").insert(action.payload);
+          // `id` is a client-side placeholder for correlating the optimistic
+          // row before the server assigns the real one — never sent to Supabase.
+          const { id, pending_sync, deleted_local, ...insertPayload } = action.payload;
+          const { error } = await supabase.from("logs").insert(insertPayload);
           if (error) throw error;
           break;
         }
@@ -169,10 +179,25 @@ export async function flushPendingActions() {
           break;
         }
 
+        case "tutLog.create": {
+          // `id` is a client-side placeholder for correlating the optimistic
+          // row before the server assigns the real one — never sent to Supabase.
+          const { id, pending_sync, deleted_local, ...insertPayload } = action.payload;
+          const { error } = await supabase.from("exercise_tut_logs").insert(insertPayload);
+          if (error) throw error;
+          break;
+        }
+
         default:
           remaining.push(action);
       }
-    } catch {
+    } catch (err) {
+      logWarn("offline.sync", `Failed to sync ${action.type}`, {
+        actionId: action.id,
+        retries: action.retries,
+        error: err instanceof Error ? err.message : String(err),
+      });
+
       remaining.push({
         ...action,
         retries: action.retries + 1,

@@ -21,7 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { ThemeType } from "../types";
 
 const IS_IOS = Platform.OS === "ios";
-const ABSOLUTE_FILL = StyleSheet.absoluteFillObject;
+const ABSOLUTE_FILL = StyleSheet.absoluteFill;
 
 type SwipeDismissArea = "sheet" | "handle";
 type SizeValue = `${number}%` | number;
@@ -425,7 +425,7 @@ export default function FancyModalShell({
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   stage: { flex: 1, justifyContent: "flex-end" },
-  backdrop: { ...StyleSheet.absoluteFillObject },
+  backdrop: { ...StyleSheet.absoluteFill },
   sheet: {
     width: "100%",
     paddingHorizontal: 20,

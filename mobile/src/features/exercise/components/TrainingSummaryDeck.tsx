@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutChangeEvent,
   NativeScrollEvent,
@@ -29,7 +29,7 @@ type Props = {
   totalRepsLabel: string;
   bestEstimated1RMLabel: string;
   bestVolumeLabel: string;
-  bodyweightRepPRLabel: string;
+  repPRLabel: string;
   workingSetsLabel: string;
   goalSnapshot: GoalSnapshot;
   compareInsight: CompareInsight;
@@ -104,7 +104,7 @@ function getRealIndexFromLoopedIndex(rawIndex: number, itemCount: number) {
 }
 
 function statValueProps(label: string) {
-  if (label === "Sessions" || label === "BW reps") {
+  if (label === "Sessions" || label === "Best reps") {
     return {
       style: styles.statValueCompact,
       minimumFontScale: 0.82,
@@ -247,7 +247,7 @@ function ProgressStats({ t, page }: { t: ThemeLike; page: ProgressPage }) {
   );
 }
 
-export default function TrainingSummaryDeck({
+function TrainingSummaryDeck({
   t,
   prItems,
   sessionsLabel,
@@ -257,7 +257,7 @@ export default function TrainingSummaryDeck({
   totalRepsLabel,
   bestEstimated1RMLabel,
   bestVolumeLabel,
-  bodyweightRepPRLabel,
+  repPRLabel,
   workingSetsLabel,
   goalSnapshot,
   compareInsight,
@@ -297,7 +297,7 @@ export default function TrainingSummaryDeck({
         stats: [
           { label: "Est. 1RM", value: bestEstimated1RMLabel },
           { label: "Best volume", value: bestVolumeLabel },
-          { label: "BW reps", value: bodyweightRepPRLabel },
+          { label: "Best reps", value: repPRLabel },
           { label: "Sets", value: workingSetsLabel },
         ],
       },
@@ -326,7 +326,7 @@ export default function TrainingSummaryDeck({
     [
       bestEstimated1RMLabel,
       bestVolumeLabel,
-      bodyweightRepPRLabel,
+      repPRLabel,
       compareAccent,
       goalSnapshot.best,
       goalSnapshot.goal,
@@ -600,6 +600,8 @@ export default function TrainingSummaryDeck({
     </View>
   );
 }
+
+export default memo(TrainingSummaryDeck);
 
 const styles = StyleSheet.create({
   deckWrap: {

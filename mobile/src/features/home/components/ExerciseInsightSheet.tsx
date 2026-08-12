@@ -49,6 +49,31 @@ type TutEntry = {
   rest_seconds: number | null;
   note: string | null;
   performed_on: string;
+  created_at?: string | null;
+};
+
+type VolumePoint = {
+  date: string;
+  volume: number;
+  logs: any[];
+  bestLog: any | null;
+  latestLog: any | null;
+};
+
+type RpePoint = {
+  date: string;
+  avgRpe: number;
+  highestRpe: number;
+  latestRpe: number;
+  entries: TutEntry[];
+  latestEntry: TutEntry | null;
+  bestTut: number;
+};
+
+type CombinedPoint = {
+  date: string;
+  volumePoint?: VolumePoint;
+  rpePoint?: RpePoint;
 };
 
 const RPE_COLOR = "#F59E0B";
@@ -57,17 +82,56 @@ const LOAD_COLOR = "#3B82F6";
 
 const n = (v: any) => Number(v ?? 0);
 
-const volumeOf = (log: any) =>
-  Math.max(1, n(log?.weight)) * n(log?.reps) * n(log?.sets);
+const volumeOf = (log: any) => {
+  const explicitVolume = Number(log?.volume ?? 0);
+  if (Number.isFinite(explicitVolume) && explicitVolume > 0) {
+    return explicitVolume;
+  }
+
+  return Math.max(1, n(log?.weight)) * n(log?.reps) * n(log?.sets);
+};
 
 const formatVol = (v: number) =>
   v > 9999 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`;
 
+const normalizeDateForDisplay = (date?: string | null) => {
+  if (!date) return "";
 
-const formatFullDate = (date?: string) => {
-  if (!date) return "—";
+  return String(date).slice(0, 10);
+};
 
-  const parsed = new Date(date);
+const trainingDateOfLog = (log: any) => {
+  return (
+    normalizeDateForDisplay(log?.log_date) ||
+    normalizeDateForDisplay(log?.created_at)
+  );
+};
+
+const trainingDateOfRpe = (entry: TutEntry) => {
+  return (
+    normalizeDateForDisplay(entry?.performed_on) ||
+    normalizeDateForDisplay(entry?.created_at)
+  );
+};
+
+const formatChartDate = (date?: string | null) => {
+  const normalized = normalizeDateForDisplay(date);
+  if (!normalized) return "—";
+
+  const parsed = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return "—";
+
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+};
+
+const formatFullDate = (date?: string | null) => {
+  const normalized = normalizeDateForDisplay(date);
+  if (!normalized) return "—";
+
+  const parsed = new Date(`${normalized}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return "—";
 
   return parsed.toLocaleDateString(undefined, {
@@ -101,6 +165,122 @@ const getRpeTone = (value: number, t: any) => {
   return t.success ?? VOLUME_COLOR;
 };
 
+function sortLogsByTrainingDateDesc(logs: any[]) {
+  return [...logs].sort((a, b) => {
+    const dateCompare = String(trainingDateOfLog(b)).localeCompare(
+      String(trainingDateOfLog(a))
+    );
+
+    if (dateCompare !== 0) return dateCompare;
+
+    return String(b?.created_at ?? "").localeCompare(String(a?.created_at ?? ""));
+  });
+}
+
+function sortRpeEntriesByTrainingDateDesc(entries: TutEntry[]) {
+  return [...entries].sort((a, b) => {
+    const dateCompare = String(trainingDateOfRpe(b)).localeCompare(
+      String(trainingDateOfRpe(a))
+    );
+
+    if (dateCompare !== 0) return dateCompare;
+
+    return String(b?.created_at ?? "").localeCompare(String(a?.created_at ?? ""));
+  });
+}
+
+function buildVolumePoints(logs: any[]): VolumePoint[] {
+  const buckets = new Map<string, any[]>();
+
+  for (const log of logs) {
+    const date = trainingDateOfLog(log);
+    if (!date) continue;
+
+    const next = buckets.get(date) ?? [];
+    next.push(log);
+    buckets.set(date, next);
+  }
+
+  return Array.from(buckets.entries())
+    .map(([date, bucketLogs]) => {
+      const sortedBucketLogs = sortLogsByTrainingDateDesc(bucketLogs);
+      const bestLog = [...bucketLogs].sort(
+        (a, b) => volumeOf(b) - volumeOf(a)
+      )[0] ?? null;
+
+      return {
+        date,
+        logs: sortedBucketLogs,
+        volume: bucketLogs.reduce((sum, log) => sum + volumeOf(log), 0),
+        bestLog,
+        latestLog: sortedBucketLogs[0] ?? null,
+      };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function buildRpePoints(entries: TutEntry[]): RpePoint[] {
+  const buckets = new Map<string, TutEntry[]>();
+
+  for (const entry of entries) {
+    const date = trainingDateOfRpe(entry);
+    if (!date || entry.rpe == null) continue;
+
+    const next = buckets.get(date) ?? [];
+    next.push(entry);
+    buckets.set(date, next);
+  }
+
+  return Array.from(buckets.entries())
+    .map(([date, bucketEntries]) => {
+      const sortedEntries = sortRpeEntriesByTrainingDateDesc(bucketEntries);
+      const rpeValues = bucketEntries
+        .map((entry) => n(entry.rpe))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+      const avgRpe = rpeValues.length
+        ? rpeValues.reduce((sum, value) => sum + value, 0) / rpeValues.length
+        : 0;
+
+      return {
+        date,
+        avgRpe,
+        highestRpe: Math.max(0, ...rpeValues),
+        latestRpe: sortedEntries[0]?.rpe == null ? 0 : n(sortedEntries[0].rpe),
+        entries: sortedEntries,
+        latestEntry: sortedEntries[0] ?? null,
+        bestTut: Math.max(0, ...bucketEntries.map((entry) => n(entry.tut_seconds))),
+      };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function buildCombinedPoints({
+  volumePoints,
+  rpePoints,
+  rangeSize,
+}: {
+  volumePoints: VolumePoint[];
+  rpePoints: RpePoint[];
+  rangeSize: RangeSize;
+}): CombinedPoint[] {
+  const byVolumeDate = new Map(volumePoints.map((point) => [point.date, point]));
+  const byRpeDate = new Map(rpePoints.map((point) => [point.date, point]));
+
+  const dates = Array.from(
+    new Set([...byVolumeDate.keys(), ...byRpeDate.keys()])
+  )
+    .sort((a, b) => b.localeCompare(a))
+    .slice(0, rangeSize)
+    .reverse();
+
+  return dates.map((date) => ({
+    date,
+    volumePoint: byVolumeDate.get(date),
+    rpePoint: byRpeDate.get(date),
+  }));
+}
+
 export function ExerciseInsightSheet({
   visible,
   onClose,
@@ -115,7 +295,9 @@ export function ExerciseInsightSheet({
   const [mode, setMode] = useState<Mode>(initialMode);
   const [rangeSize, setRangeSize] = useState<RangeSize>(10);
   const [activeLogIndex, setActiveLogIndex] = useState<number | null>(null);
+  const [freshLogs, setFreshLogs] = useState<any[]>([]);
   const [rpeEntries, setRpeEntries] = useState<TutEntry[]>([]);
+  const [dataLoading, setDataLoading] = useState(false);
   const [rpeLoading, setRpeLoading] = useState(false);
 
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
@@ -154,7 +336,8 @@ export function ExerciseInsightSheet({
 
     let active = true;
 
-    async function loadRpeEntries() {
+    async function loadFreshExerciseData() {
+      setDataLoading(true);
       setRpeLoading(true);
 
       try {
@@ -174,35 +357,57 @@ export function ExerciseInsightSheet({
         if (!active) return;
 
         if (exerciseError || !exerciseData?.id) {
+          setFreshLogs([]);
           setRpeEntries([]);
           return;
         }
 
-        const { data, error } = await supabase
-          .from("exercise_tut_logs")
-          .select(
-            "id, tut_seconds, load_kg, sets, reps, rpe, rest_seconds, note, performed_on"
-          )
-          .eq("exercise_id", exerciseData.id)
-          .eq("user_id", user.id)
-          .order("performed_on", { ascending: false })
-          .limit(50);
+        const [logResponse, rpeResponse] = await Promise.all([
+          supabase
+            .from("logs")
+            .select("id, exercise_id, weight, reps, sets, volume, created_at, log_date, type, day")
+            .eq("exercise_id", exerciseData.id)
+            .eq("user_id", user.id)
+            .order("log_date", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(240),
+          supabase
+            .from("exercise_tut_logs")
+            .select(
+              "id, tut_seconds, load_kg, sets, reps, rpe, rest_seconds, note, performed_on, created_at"
+            )
+            .eq("exercise_id", exerciseData.id)
+            .eq("user_id", user.id)
+            .not("rpe", "is", null)
+            .order("performed_on", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(120),
+        ]);
 
         if (!active) return;
 
-        if (error) {
-          console.warn("Failed to load advanced RPE entries", error);
-          setRpeEntries([]);
-          return;
+        if (logResponse.error) {
+          console.warn("Failed to load fresh volume logs", logResponse.error);
+          setFreshLogs([]);
+        } else {
+          setFreshLogs((logResponse.data ?? []) as any[]);
         }
 
-        setRpeEntries(((data ?? []) as TutEntry[]).filter((entry) => entry.rpe != null));
+        if (rpeResponse.error) {
+          console.warn("Failed to load advanced RPE entries", rpeResponse.error);
+          setRpeEntries([]);
+        } else {
+          setRpeEntries(((rpeResponse.data ?? []) as TutEntry[]).filter((entry) => entry.rpe != null));
+        }
       } finally {
-        if (active) setRpeLoading(false);
+        if (active) {
+          setDataLoading(false);
+          setRpeLoading(false);
+        }
       }
     }
 
-    void loadRpeEntries();
+    void loadFreshExerciseData();
 
     return () => {
       active = false;
@@ -217,62 +422,114 @@ export function ExerciseInsightSheet({
     }).start(onClose);
   }, [onClose, translateY]);
 
-  const chartLogs = useMemo(
-    () => logs.slice(0, rangeSize).reverse(),
-    [logs, rangeSize]
+  const effectiveLogs = useMemo(() => {
+    return freshLogs.length > 0 ? freshLogs : logs;
+  }, [freshLogs, logs]);
+
+  const sortedLogs = useMemo(
+    () => sortLogsByTrainingDateDesc(effectiveLogs),
+    [effectiveLogs]
   );
 
-  const rpeChartEntries = useMemo(
-    () => rpeEntries.slice(0, rangeSize).reverse(),
-    [rpeEntries, rangeSize]
+  const sortedRpeEntries = useMemo(
+    () => sortRpeEntriesByTrainingDateDesc(rpeEntries),
+    [rpeEntries]
   );
 
-  const volumeData = useMemo(() => chartLogs.map(volumeOf), [chartLogs]);
+  const volumePoints = useMemo(
+    () => buildVolumePoints(sortedLogs),
+    [sortedLogs]
+  );
+
+  const rpePoints = useMemo(
+    () => buildRpePoints(sortedRpeEntries),
+    [sortedRpeEntries]
+  );
+
+  const chartVolumePoints = useMemo(
+    () => volumePoints.slice(0, rangeSize).reverse(),
+    [rangeSize, volumePoints]
+  );
+
+  const chartRpePoints = useMemo(
+    () => rpePoints.slice(0, rangeSize).reverse(),
+    [rangeSize, rpePoints]
+  );
+
+  const combinedPoints = useMemo(
+    () => buildCombinedPoints({ volumePoints, rpePoints, rangeSize }),
+    [rangeSize, rpePoints, volumePoints]
+  );
+
+  const volumeData = useMemo(
+    () => chartVolumePoints.map((point) => point.volume),
+    [chartVolumePoints]
+  );
+
   const rpeData = useMemo(
-    () => rpeChartEntries.map((entry) => n(entry.rpe)),
-    [rpeChartEntries]
+    () => chartRpePoints.map((point) => point.avgRpe),
+    [chartRpePoints]
   );
 
-  const selectedVolumeLog =
-    mode !== "rpe" && activeLogIndex !== null ? chartLogs[activeLogIndex] : null;
+  const selectedCombinedPoint =
+    mode === "combined" && activeLogIndex !== null
+      ? combinedPoints[activeLogIndex] ?? null
+      : null;
 
-  const selectedRpeEntry =
-    mode === "rpe" && activeLogIndex !== null
-      ? rpeChartEntries[activeLogIndex]
-      : mode === "combined" && activeLogIndex !== null
-        ? rpeChartEntries[activeLogIndex]
-        : null;
+  const selectedVolumePoint =
+    activeLogIndex !== null
+      ? mode === "combined"
+        ? selectedCombinedPoint?.volumePoint ?? null
+        : mode !== "rpe"
+          ? chartVolumePoints[activeLogIndex] ?? null
+          : null
+      : null;
 
-  const hasVolumeData = volumeData.length > 0;
-  const hasRpeData = rpeData.some((rpe) => rpe > 0);
+  const selectedRpePoint =
+    activeLogIndex !== null
+      ? mode === "combined"
+        ? selectedCombinedPoint?.rpePoint ?? null
+        : mode === "rpe"
+          ? chartRpePoints[activeLogIndex] ?? null
+          : null
+      : null;
+
+  const selectedVolumeLog = selectedVolumePoint?.bestLog ?? null;
+  const selectedRpeEntry = selectedRpePoint?.latestEntry ?? null;
+
+  const hasVolumeData = volumePoints.length > 0;
+  const hasRpeData = rpePoints.some((point) => point.avgRpe > 0);
   const hasAnyData = hasVolumeData || hasRpeData;
 
   const summary = useMemo(() => {
-    const totalVolume = volumeData.reduce((a, b) => a + b, 0);
-    const bestVolume = Math.max(0, ...volumeData);
-    const avgVolume = volumeData.length
-      ? Math.round(totalVolume / volumeData.length)
+    const totalVolume = volumePoints.reduce((sum, point) => sum + point.volume, 0);
+    const bestVolume = Math.max(0, ...volumePoints.map((point) => point.volume));
+    const avgVolume = volumePoints.length
+      ? Math.round(totalVolume / volumePoints.length)
       : 0;
 
-    const rpeValues = rpeEntries.map((entry) => n(entry.rpe)).filter((rpe) => rpe > 0);
-    const avgRpe = rpeValues.length
-      ? rpeValues.reduce((sum, rpe) => sum + rpe, 0) / rpeValues.length
+    const allRpeValues = rpePoints
+      .flatMap((point) => point.entries.map((entry) => n(entry.rpe)))
+      .filter((rpe) => rpe > 0);
+
+    const avgRpe = allRpeValues.length
+      ? allRpeValues.reduce((sum, rpe) => sum + rpe, 0) / allRpeValues.length
       : null;
 
-    const recentVolumes = logs.slice(0, 2).map(volumeOf);
+    const recentVolumes = volumePoints.slice(0, 2).map((point) => point.volume);
     const trendPct =
       recentVolumes.length >= 2 && recentVolumes[1] > 0
         ? Math.round(((recentVolumes[0] - recentVolumes[1]) / recentVolumes[1]) * 100)
         : null;
 
-    const bestLoad = Math.max(0, ...logs.map((log) => n(log.weight)));
+    const bestLoad = Math.max(0, ...sortedLogs.map((log) => n(log.weight)));
     const est1RM = Math.max(
       0,
-      ...logs.map((log) => n(log.weight) * (1 + n(log.reps) / 30))
+      ...sortedLogs.map((log) => n(log.weight) * (1 + n(log.reps) / 30))
     );
-    const highestRpe = Math.max(0, ...rpeValues);
-    const latestRpe = rpeEntries.find((entry) => entry.rpe != null)?.rpe ?? 0;
-    const bestTut = Math.max(0, ...rpeEntries.map((entry) => n(entry.tut_seconds)));
+    const highestRpe = Math.max(0, ...allRpeValues);
+    const latestRpe = rpePoints[0]?.latestRpe ?? 0;
+    const bestTut = Math.max(0, ...rpePoints.map((point) => point.bestTut));
 
     return {
       totalVolume,
@@ -286,7 +543,7 @@ export function ExerciseInsightSheet({
       latestRpe,
       bestTut,
     };
-  }, [logs, volumeData, rpeEntries]);
+  }, [rpePoints, sortedLogs, volumePoints]);
 
   const fatigueState = useMemo(() => {
     if (summary.avgRpe == null) return "—";
@@ -311,6 +568,8 @@ export function ExerciseInsightSheet({
   }, [mode, summary.avgRpe, summary.trendPct]);
 
   const insightSentence = useMemo(() => {
+    if (dataLoading) return "Refreshing calendar-based logs and graph dates...";
+
     if (mode === "rpe") {
       if (!hasRpeData) return "Add an advanced entry to unlock effort and fatigue trends.";
       if (summary.avgRpe == null) return "RPE data is building up.";
@@ -323,42 +582,106 @@ export function ExerciseInsightSheet({
       if (!hasVolumeData && !hasRpeData) return "Log volume or advanced RPE data to compare output and effort.";
       if (!hasRpeData) return "Volume is available. Add advanced RPE entries to compare effort.";
       if (!hasVolumeData) return "RPE is available. Add normal logs to compare output.";
-      return "Compare output from normal logs with effort from advanced entries.";
+      return "Volume and RPE are aligned by actual training date.";
     }
 
     if (!hasVolumeData) return "Add normal workout logs to unlock volume insights.";
-    if (summary.trendPct == null) return "Volume trend will appear after more logs.";
-    if (summary.trendPct > 0) return `Volume is up ${summary.trendPct}% versus your previous log.`;
-    if (summary.trendPct < 0) return `Volume is down ${Math.abs(summary.trendPct)}% versus your previous log.`;
-    return "Volume is steady versus your previous log.";
-  }, [hasRpeData, hasVolumeData, mode, summary.avgRpe, summary.trendPct]);
+    if (summary.trendPct == null) return "Volume trend will appear after more training dates.";
+    if (summary.trendPct > 0) return `Volume is up ${summary.trendPct}% versus your previous training date.`;
+    if (summary.trendPct < 0) return `Volume is down ${Math.abs(summary.trendPct)}% versus your previous training date.`;
+    return "Volume is steady versus your previous training date.";
+  }, [
+    dataLoading,
+    hasRpeData,
+    hasVolumeData,
+    mode,
+    summary.avgRpe,
+    summary.trendPct,
+  ]);
 
   const stats = useMemo<Stat[]>(() => {
-    if (selectedRpeEntry && mode === "rpe") {
+    if (mode === "combined" && selectedCombinedPoint) {
       return [
-        { label: `RPE • ${formatFullDate(selectedRpeEntry.performed_on)}`, value: selectedRpeEntry.rpe ?? "—", color: getRpeTone(n(selectedRpeEntry.rpe), t) },
-        { label: "TUT", value: `${selectedRpeEntry.tut_seconds}s` },
-        { label: "Load", value: tutLoadLabel(selectedRpeEntry) },
-        { label: "Work", value: `${selectedRpeEntry.reps} × ${selectedRpeEntry.sets}` },
+        {
+          label: `Date • ${formatFullDate(selectedCombinedPoint.date)}`,
+          value: selectedCombinedPoint.rpePoint && selectedCombinedPoint.volumePoint
+            ? "Volume + RPE"
+            : selectedCombinedPoint.volumePoint
+              ? "Volume only"
+              : "RPE only",
+          color: t.text,
+        },
+        {
+          label: "Volume",
+          value: selectedCombinedPoint.volumePoint
+            ? formatVol(selectedCombinedPoint.volumePoint.volume)
+            : "—",
+          color: VOLUME_COLOR,
+        },
+        {
+          label: "Avg RPE",
+          value: selectedCombinedPoint.rpePoint
+            ? selectedCombinedPoint.rpePoint.avgRpe.toFixed(1)
+            : "—",
+          color: selectedCombinedPoint.rpePoint
+            ? getRpeTone(selectedCombinedPoint.rpePoint.avgRpe, t)
+            : t.text,
+        },
+        {
+          label: "Entries",
+          value:
+            (selectedCombinedPoint.volumePoint?.logs.length ?? 0) +
+            (selectedCombinedPoint.rpePoint?.entries.length ?? 0),
+        },
       ];
     }
 
-    if (selectedVolumeLog) {
-      const vol = volumeOf(selectedVolumeLog);
-      const load = loadLabel(selectedVolumeLog.weight);
+    if (selectedRpePoint && mode === "rpe") {
+      return [
+        {
+          label: `RPE • ${formatFullDate(selectedRpePoint.date)}`,
+          value: selectedRpePoint.avgRpe.toFixed(1),
+          color: getRpeTone(selectedRpePoint.avgRpe, t),
+        },
+        {
+          label: "Load",
+          value: selectedRpeEntry ? tutLoadLabel(selectedRpeEntry) : "—",
+          color: LOAD_COLOR,
+        },
+        { label: "Best TUT", value: `${selectedRpePoint.bestTut}s` },
+        { label: "Entries", value: selectedRpePoint.entries.length },
+      ];
+    }
+
+    if (selectedVolumePoint) {
+      const bestLog = selectedVolumePoint.bestLog;
+      const load = loadLabel(bestLog?.weight);
 
       return [
-        { label: `Log • ${formatFullDate(selectedVolumeLog.created_at)}`, value: `${load} × ${selectedVolumeLog.reps ?? 0} × ${selectedVolumeLog.sets ?? 0}` },
-        { label: "Volume", value: formatVol(vol), color: VOLUME_COLOR },
-        { label: "Load", value: load, color: LOAD_COLOR },
-        { label: "Type", value: selectedVolumeLog.type ? selectedVolumeLog.type[0].toUpperCase() + selectedVolumeLog.type.slice(1) : "Working" },
+        {
+          label: `Volume • ${formatFullDate(selectedVolumePoint.date)}`,
+          value: formatVol(selectedVolumePoint.volume),
+          color: VOLUME_COLOR,
+        },
+        {
+          label: "Best Log",
+          value: bestLog
+            ? `${load} × ${bestLog.reps ?? 0} × ${bestLog.sets ?? 0}`
+            : "—",
+        },
+        { label: "Logs", value: selectedVolumePoint.logs.length },
+        {
+          label: "Load",
+          value: bestLog ? load : "—",
+          color: LOAD_COLOR,
+        },
       ];
     }
 
     if (mode === "volume") {
       return [
-        { label: "Best Vol", value: summary.bestVolume ? formatVol(summary.bestVolume) : "—", color: VOLUME_COLOR },
-        { label: "Avg Vol", value: summary.avgVolume ? formatVol(summary.avgVolume) : "—" },
+        { label: "Best Date", value: summary.bestVolume ? formatVol(summary.bestVolume) : "—", color: VOLUME_COLOR },
+        { label: "Avg Date", value: summary.avgVolume ? formatVol(summary.avgVolume) : "—" },
         { label: "Total", value: summary.totalVolume ? formatVol(summary.totalVolume) : "—" },
         {
           label: "Trend",
@@ -391,7 +714,16 @@ export function ExerciseInsightSheet({
         color: summary.trendPct == null ? t.text : summary.trendPct >= 0 ? t.success : t.danger,
       },
     ];
-  }, [fatigueState, mode, selectedRpeEntry, selectedVolumeLog, summary, t]);
+  }, [
+    fatigueState,
+    mode,
+    selectedCombinedPoint,
+    selectedRpeEntry,
+    selectedRpePoint,
+    selectedVolumePoint,
+    summary,
+    t,
+  ]);
 
   const handleNav = useCallback(
     (path: "logs" | "advanced") => {
@@ -427,8 +759,8 @@ export function ExerciseInsightSheet({
     const body = isRpe
       ? "RPE lives inside Advanced Insights with TUT, rest, and tempo notes."
       : kind === "combined"
-        ? "Add normal logs and advanced RPE entries to compare output with effort."
-        : "Add workout logs from this exercise to unlock volume insights.";
+        ? "Add normal logs and advanced RPE entries to compare output with effort by date."
+        : "Add workout logs from this exercise to unlock date-based volume insights.";
 
     return (
       <View style={styles.empty}>
@@ -450,7 +782,19 @@ export function ExerciseInsightSheet({
     );
   };
 
-  const renderSingleBars = (data: number[], color: string, maxValue: number, isRpe = false) => {
+  const renderSingleBars = ({
+    data,
+    points,
+    color,
+    maxValue,
+    isRpe = false,
+  }: {
+    data: number[];
+    points: (VolumePoint | RpePoint)[];
+    color: string;
+    maxValue: number;
+    isRpe?: boolean;
+  }) => {
     const max = Math.max(maxValue, 1);
     const bestValue = Math.max(0, ...data);
     const latestIndex = data.length - 1;
@@ -462,16 +806,17 @@ export function ExerciseInsightSheet({
         contentContainerStyle={styles.chartScroll}
       >
         {data.map((value, index) => {
+          const point = points[index];
           const heightPct = Math.max(8, (value / max) * 100);
           const focused = activeLogIndex === index;
           const faded = activeLogIndex !== null && !focused;
           const isLatest = index === latestIndex;
           const isBest = value === bestValue && bestValue > 0;
-          const barColor = isBest && !isRpe ? VOLUME_COLOR : isLatest ? color : color;
+          const barColor = isBest && !isRpe ? VOLUME_COLOR : color;
 
           return (
             <TouchableOpacity
-              key={`${mode}-${index}`}
+              key={`${mode}-${point?.date ?? index}`}
               activeOpacity={0.9}
               onPress={() => selectBar(index)}
               style={styles.barWrap}
@@ -500,9 +845,26 @@ export function ExerciseInsightSheet({
 
               <Text
                 numberOfLines={1}
-                style={[styles.barLabel, { color: t.mutedText, opacity: focused ? 1 : 0.65 }]}
+                style={[
+                  styles.barDateLabel,
+                  { color: t.mutedText, opacity: focused ? 1 : 0.68 },
+                ]}
               >
-                {isRpe ? (value > 0 ? value.toFixed(value % 1 === 0 ? 0 : 1) : "—") : formatVol(value)}
+                {formatChartDate(point?.date)}
+              </Text>
+
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.barValueLabel,
+                  { color: t.mutedText, opacity: focused ? 1 : 0.55 },
+                ]}
+              >
+                {isRpe
+                  ? value > 0
+                    ? value.toFixed(value % 1 === 0 ? 0 : 1)
+                    : "—"
+                  : formatVol(value)}
               </Text>
             </TouchableOpacity>
           );
@@ -512,10 +874,12 @@ export function ExerciseInsightSheet({
   };
 
   const renderCompareBars = () => {
-    const maxVol = Math.max(...volumeData, 1) * 1.2;
-    const length = Math.max(volumeData.length, rpeData.length);
+    const maxVol = Math.max(
+      ...combinedPoints.map((point) => point.volumePoint?.volume ?? 0),
+      1
+    ) * 1.2;
 
-    if (!length || (!hasVolumeData && !hasRpeData)) {
+    if (!combinedPoints.length || (!hasVolumeData && !hasRpeData)) {
       return renderEmptyState("combined", RPE_COLOR);
     }
 
@@ -525,15 +889,15 @@ export function ExerciseInsightSheet({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.chartScroll}
       >
-        {Array.from({ length }).map((_, index) => {
-          const volume = volumeData[index] ?? 0;
-          const rpe = rpeData[index] ?? 0;
+        {combinedPoints.map((point, index) => {
+          const volume = point.volumePoint?.volume ?? 0;
+          const rpe = point.rpePoint?.avgRpe ?? 0;
           const focused = activeLogIndex === index;
           const faded = activeLogIndex !== null && !focused;
 
           return (
             <TouchableOpacity
-              key={`compare-${index}`}
+              key={`compare-${point.date}`}
               activeOpacity={0.9}
               onPress={() => selectBar(index)}
               style={styles.comboWrap}
@@ -562,8 +926,14 @@ export function ExerciseInsightSheet({
                 />
               </View>
 
-              <Text style={[styles.comboLabel, { color: t.mutedText, opacity: focused ? 1 : 0.65 }]}>
-                {index + 1}
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.comboLabel,
+                  { color: t.mutedText, opacity: focused ? 1 : 0.65 },
+                ]}
+              >
+                {formatChartDate(point.date)}
               </Text>
             </TouchableOpacity>
           );
@@ -573,15 +943,17 @@ export function ExerciseInsightSheet({
   };
 
   const selectedTitle = useMemo(() => {
-    if (mode === "rpe" && selectedRpeEntry) {
-      return `Selected ${formatFullDate(selectedRpeEntry.performed_on)}`;
+    if (selectedCombinedPoint) {
+      return `Selected ${formatFullDate(selectedCombinedPoint.date)}`;
     }
-    if (selectedVolumeLog) return `Selected ${formatFullDate(selectedVolumeLog.created_at)}`;
-    if (mode === "combined" && selectedRpeEntry) {
-      return `Selected RPE ${formatFullDate(selectedRpeEntry.performed_on)}`;
+    if (mode === "rpe" && selectedRpePoint) {
+      return `Selected ${formatFullDate(selectedRpePoint.date)}`;
+    }
+    if (selectedVolumePoint) {
+      return `Selected ${formatFullDate(selectedVolumePoint.date)}`;
     }
     return null;
-  }, [mode, selectedRpeEntry, selectedVolumeLog]);
+  }, [mode, selectedCombinedPoint, selectedRpePoint, selectedVolumePoint]);
 
   return (
     <Modal visible={visible} transparent animationType="none">
@@ -604,7 +976,7 @@ export function ExerciseInsightSheet({
               </Text>
 
               <Text style={[styles.subtitle, { color: t.mutedText }]}>
-                {hasAnyData ? "Volume, effort, and recent trend" : "Add logs to unlock insights"}
+                {hasAnyData ? "Date-based volume, effort, and trend" : "Add logs to unlock insights"}
               </Text>
             </View>
 
@@ -681,18 +1053,35 @@ export function ExerciseInsightSheet({
                 ]}
               >
                 {mode === "volume" &&
-                  (!hasVolumeData
-                    ? renderEmptyState("volume", VOLUME_COLOR)
-                    : renderSingleBars(volumeData, VOLUME_COLOR, Math.max(...volumeData, 1) * 1.2))}
+                  (dataLoading ? (
+                    <LoadingGraph t={t} />
+                  ) : !hasVolumeData ? (
+                    renderEmptyState("volume", VOLUME_COLOR)
+                  ) : (
+                    renderSingleBars({
+                      data: volumeData,
+                      points: chartVolumePoints,
+                      color: VOLUME_COLOR,
+                      maxValue: Math.max(...volumeData, 1) * 1.2,
+                    })
+                  ))}
 
                 {mode === "rpe" &&
-                  (rpeLoading
-                    ? <LoadingGraph t={t} />
-                    : !hasRpeData
-                      ? renderEmptyState("rpe", RPE_COLOR)
-                      : renderSingleBars(rpeData, RPE_COLOR, 10, true))}
+                  (rpeLoading ? (
+                    <LoadingGraph t={t} />
+                  ) : !hasRpeData ? (
+                    renderEmptyState("rpe", RPE_COLOR)
+                  ) : (
+                    renderSingleBars({
+                      data: rpeData,
+                      points: chartRpePoints,
+                      color: RPE_COLOR,
+                      maxValue: 10,
+                      isRpe: true,
+                    })
+                  ))}
 
-                {mode === "combined" && renderCompareBars()}
+                {mode === "combined" && (dataLoading || rpeLoading ? <LoadingGraph t={t} /> : renderCompareBars())}
               </Animated.View>
             </View>
 
@@ -805,7 +1194,7 @@ function LoadingGraph({ t }: { t: any }) {
   return (
     <View style={styles.loadingGraph}>
       <ActivityIndicator color={t.text} />
-      <Text style={[styles.loadingGraphText, { color: t.mutedText }]}>Loading RPE data…</Text>
+      <Text style={[styles.loadingGraphText, { color: t.mutedText }]}>Loading date-based graph data…</Text>
     </View>
   );
 }
@@ -850,7 +1239,7 @@ const styles = StyleSheet.create({
   },
 
   overlayBg: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.65)",
   },
 
@@ -1020,7 +1409,7 @@ const styles = StyleSheet.create({
   },
 
   barWrap: {
-    width: 24,
+    width: 42,
     height: "100%",
     alignItems: "center",
     justifyContent: "flex-end",
@@ -1046,14 +1435,25 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
 
-  barLabel: {
+  barDateLabel: {
     fontSize: 9,
+    lineHeight: 11,
+    fontWeight: "900",
+    maxWidth: 42,
+    textAlign: "center",
+  },
+
+  barValueLabel: {
+    marginTop: 1,
+    fontSize: 8.5,
+    lineHeight: 10,
     fontWeight: "800",
-    maxWidth: 34,
+    maxWidth: 42,
+    textAlign: "center",
   },
 
   comboWrap: {
-    width: 28,
+    width: 44,
     height: "100%",
     alignItems: "center",
     justifyContent: "flex-end",
@@ -1076,7 +1476,10 @@ const styles = StyleSheet.create({
   comboLabel: {
     marginTop: 5,
     fontSize: 9,
-    fontWeight: "800",
+    lineHeight: 11,
+    fontWeight: "900",
+    maxWidth: 44,
+    textAlign: "center",
   },
 
   empty: {

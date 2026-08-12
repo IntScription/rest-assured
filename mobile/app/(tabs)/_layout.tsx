@@ -1,12 +1,19 @@
 import React from "react";
 import { Tabs } from "expo-router";
+import type { BottomTabBarProps } from "expo-router/js-tabs";
 
 import CustomTabBar from "@/components/navigation/CustomTabBar";
 
 export default function TabsLayout() {
   return (
     <Tabs
-      tabBar={(props) => <CustomTabBar {...props} />}
+      tabBar={(props) => (
+        // expo-router ships its own parallel BottomTabBarProps type since it no
+        // longer depends on React Navigation; CustomTabBar only reads state/
+        // descriptors/navigation (not the header-related fields where the two
+        // type definitions structurally diverge), so this is a safe boundary cast.
+        <CustomTabBar {...(props as unknown as BottomTabBarProps)} />
+      )}
       screenOptions={{
         headerShown: false,
         lazy: false,

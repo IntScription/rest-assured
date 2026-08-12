@@ -1,4 +1,4 @@
-import React from "react";
+import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { PR_COLORS } from "../constants";
@@ -15,7 +15,7 @@ type Props = {
   onBack: () => void;
 };
 
-export default function ExerciseHeader({
+function ExerciseHeader({
   t,
   exerciseName,
   splitName,
@@ -67,6 +67,8 @@ export default function ExerciseHeader({
     </View>
   );
 }
+
+export default memo(ExerciseHeader);
 
 const styles = StyleSheet.create({
   header: {

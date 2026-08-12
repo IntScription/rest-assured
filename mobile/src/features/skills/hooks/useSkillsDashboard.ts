@@ -14,8 +14,17 @@ import type {
 import { getSkillHighlight } from "@/src/features/skills/utils/get-skill-highlight";
 import { getSkillProgress } from "@/src/features/skills/utils/get-skill-progress";
 import { getSkillStreak } from "@/src/features/skills/utils/get-skill-streak";
+import { getSkillMetricValue } from "@/src/features/skills/utils/skill-pr";
 import { normalizeSkillStatus } from "@/src/features/skills/utils/normalize-skill-status";
 import { supabase } from "@/src/lib/supabase";
+import { cacheGetJson, cacheKey, cacheSetJson } from "@/src/lib/offline-cache";
+
+type CachedSkillsDashboard = {
+  cards: SkillDashboardCard[];
+  nextRecommendation: SkillDashboardCard | null;
+  recentMilestones: RecentMilestone[];
+  summary: SkillsDashboardSummary;
+};
 
 type RecentMilestone = {
   id: string;
@@ -84,7 +93,7 @@ function isSkillDashboardCard(
   return value !== null;
 }
 
-function buildLogMaps(logs: SkillLog[]) {
+function buildLogMaps(logs: SkillLog[], skillMetricTypeById: Map<string, Skill["metric_type"]>) {
   const logsByUserSkillId = new Map<string, SkillLog[]>();
   const bestLogByUserSkillId = new Map<string, SkillLog>();
 
@@ -93,13 +102,16 @@ function buildLogMaps(logs: SkillLog[]) {
     existingLogs.push(log);
     logsByUserSkillId.set(log.user_skill_id, existingLogs);
 
-    const existingBest = bestLogByUserSkillId.get(log.user_skill_id);
-    const logScore = Number(log.value ?? 0);
-    const existingScore = Number(
-      existingBest?.value ?? Number.NEGATIVE_INFINITY
-    );
+    const metricType = skillMetricTypeById.get(log.skill_id);
+    if (!metricType) continue;
 
-    if (!existingBest || logScore > existingScore) {
+    const logScore = getSkillMetricValue(log, metricType);
+    if (logScore === null) continue;
+
+    const existingBest = bestLogByUserSkillId.get(log.user_skill_id);
+    const existingScore = existingBest ? getSkillMetricValue(existingBest, metricType) : null;
+
+    if (!existingBest || existingScore === null || logScore > existingScore) {
       bestLogByUserSkillId.set(log.user_skill_id, log);
     }
   }
@@ -138,6 +150,43 @@ export function useSkillsDashboard() {
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+    };
+  }, []);
+
+  // Instant paint from the last-known dashboard while buildState() refetches
+  // in the background — mirrors HomeScreen's cache-first hydration, since
+  // this hook previously had no caching at all and always showed the
+  // skeleton dashboard on every visit.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      const userId = data.session?.user?.id;
+      if (!userId || cancelled) return;
+
+      const cached = await cacheGetJson<CachedSkillsDashboard>(
+        cacheKey(["skills-dashboard", userId])
+      );
+      if (!cached || cancelled) return;
+
+      setState((prev) =>
+        prev.loading
+          ? {
+            ...prev,
+            loading: false,
+            userId,
+            cards: cached.cards,
+            nextRecommendation: cached.nextRecommendation,
+            recentMilestones: cached.recentMilestones,
+            summary: cached.summary,
+          }
+          : prev
+      );
+    })();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -222,7 +271,8 @@ export function useSkillsDashboard() {
 
     const skillMap = new Map(skills.map((skill) => [skill.id, skill]));
     const stageMap = new Map(stages.map((stage) => [stage.id, stage]));
-    const { logsByUserSkillId, bestLogByUserSkillId } = buildLogMaps(logs);
+    const skillMetricTypeById = new Map(skills.map((skill) => [skill.id, skill.metric_type]));
+    const { logsByUserSkillId, bestLogByUserSkillId } = buildLogMaps(logs, skillMetricTypeById);
     const milestoneCountsByUserSkillId = buildMilestoneCountMap(milestones);
 
     const cards = userSkills
@@ -254,6 +304,7 @@ export function useSkillsDashboard() {
             bestLog,
             currentStage,
           }),
+          isNewBest: Boolean(latestLog && bestLog && latestLog.id === bestLog.id),
         };
       })
       .filter(isSkillDashboardCard)
@@ -302,6 +353,13 @@ export function useSkillsDashboard() {
         return aMilestones - bMilestones;
       })[0] ?? null;
 
+    const summary: SkillsDashboardSummary = {
+      activeSkills: activeCards.length,
+      sessionsThisWeek: weeklyLogs.length,
+      streakDays: streak.currentStreak,
+      completedMilestones: milestones.length,
+    };
+
     commit((prev) => ({
       ...prev,
       loading: false,
@@ -310,13 +368,15 @@ export function useSkillsDashboard() {
       cards,
       nextRecommendation,
       recentMilestones,
-      summary: {
-        activeSkills: activeCards.length,
-        sessionsThisWeek: weeklyLogs.length,
-        streakDays: streak.currentStreak,
-        completedMilestones: milestones.length,
-      },
+      summary,
     }));
+
+    void cacheSetJson<CachedSkillsDashboard>(cacheKey(["skills-dashboard", userId]), {
+      cards,
+      nextRecommendation,
+      recentMilestones,
+      summary,
+    });
   }, []);
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -119,6 +119,13 @@ export default function ResetPasswordScreen() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [preparing, setPreparing] = useState(true);
+  const passwordInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (preparing) return;
+    const timer = setTimeout(() => passwordInputRef.current?.focus(), 400);
+    return () => clearTimeout(timer);
+  }, [preparing]);
 
   useEffect(() => {
     let mounted = true;
@@ -153,6 +160,8 @@ export default function ResetPasswordScreen() {
   }, []);
 
   const handleReset = async () => {
+    if (loading) return;
+
     const trimmedPassword = password.trim();
 
     if (!trimmedPassword) {
@@ -263,11 +272,14 @@ export default function ResetPasswordScreen() {
         ]}
       >
         <TextInput
+          ref={passwordInputRef}
           placeholder="New Password"
           secureTextEntry
           value={password}
           onChangeText={setPassword}
           placeholderTextColor={t.mutedText}
+          returnKeyType="done"
+          onSubmitEditing={handleReset}
           style={[
             styles.input,
             {

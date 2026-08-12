@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -30,6 +30,8 @@ import {
 } from "@/src/features/skills/services";
 import type { SkillLog, SkillMetricType } from "@/src/features/skills/types";
 import { updateSkillStatus } from "@/src/features/skills/utils/update-skill-status";
+import { getSkillPrFlags } from "@/src/features/skills/utils/skill-pr";
+import { SkillProgressGraphCard } from "@/src/features/skills/components/SkillProgressGraphCard";
 import {
   getSkillStatusSync,
   publishSkillStatusSync,
@@ -132,6 +134,10 @@ export default function SkillDetailScreen() {
     notes: "",
   });
 
+  const valueInputRef = useRef<TextInput>(null);
+  const attemptsInputRef = useRef<TextInput>(null);
+  const notesInputRef = useRef<TextInput>(null);
+
   const { toast, showToast, animatedStyle } = useAchievementUnlocks();
 
   const goToSkillsHome = () => {
@@ -187,6 +193,15 @@ export default function SkillDetailScreen() {
     });
   }, [showQuickLog, latestLog, skill]);
 
+  useEffect(() => {
+    if (!showQuickLog || !skill) return;
+
+    const ref = skill.metric_type === "attempts" ? attemptsInputRef : valueInputRef;
+    const timer = setTimeout(() => ref.current?.focus(), 300);
+
+    return () => clearTimeout(timer);
+  }, [showQuickLog, skill]);
+
   const resolvedUserSkillId = userSkill?.id;
   const resolvedUserSkillStatus = userSkill?.status;
 
@@ -236,6 +251,7 @@ export default function SkillDetailScreen() {
   }, [localStatusOverride, resolvedUserSkillId, routeInitialStatus, routeUserSkillId, userSkill]);
 
   const handleQuickLogSave = async () => {
+    if (savingLog) return;
     if (!skill || !userSkill || !userId) return;
 
     try {
@@ -445,6 +461,11 @@ export default function SkillDetailScreen() {
   const progressPercent = useMemo(
     () => calcProgress(bestLog?.value ?? null, currentStage?.target_value ?? null),
     [bestLog?.value, currentStage?.target_value]
+  );
+
+  const skillPrFlags = useMemo(
+    () => (skill ? getSkillPrFlags(logs, skill.metric_type) : {}),
+    [logs, skill]
   );
 
   const headerTitle = skill?.name ?? "Skill";
@@ -872,6 +893,8 @@ export default function SkillDetailScreen() {
             </View>
           </View>
 
+          <SkillProgressGraphCard t={t} logs={logs} metricType={skill.metric_type} />
+
           <View
             style={[
               styles.sectionCard,
@@ -901,9 +924,18 @@ export default function SkillDetailScreen() {
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.logTitle, { color: t.text }]}>
-                      {new Date(log.logged_at).toLocaleDateString()}
-                    </Text>
+                    <View style={styles.logTitleRow}>
+                      <Text style={[styles.logTitle, { color: t.text }]}>
+                        {new Date(log.logged_at).toLocaleDateString()}
+                      </Text>
+                      {skillPrFlags[log.id] ? (
+                        <View
+                          style={[styles.currentBadge, { backgroundColor: "#F59E0B" }]}
+                        >
+                          <Text style={styles.currentBadgeText}>PR</Text>
+                        </View>
+                      ) : null}
+                    </View>
                     <Text style={[styles.logBody, { color: t.mutedText }]}>
                       {formatLogValue(log, skill.metric_type)}
                     </Text>
@@ -987,6 +1019,7 @@ export default function SkillDetailScreen() {
               {(skill.metric_type === "seconds" ||
                 skill.metric_type === "reps") && (
                   <TextInput
+                    ref={valueInputRef}
                     value={draft.value}
                     onChangeText={(value) =>
                       setDraft((prev) => ({ ...prev, value }))
@@ -998,6 +1031,9 @@ export default function SkillDetailScreen() {
                         : "Enter reps"
                     }
                     placeholderTextColor={t.mutedText}
+                    returnKeyType="next"
+                    submitBehavior="submit"
+                    onSubmitEditing={() => notesInputRef.current?.focus()}
                     style={[
                       styles.input,
                       {
@@ -1011,6 +1047,7 @@ export default function SkillDetailScreen() {
 
               {skill.metric_type === "attempts" && (
                 <TextInput
+                  ref={attemptsInputRef}
                   value={draft.attempts}
                   onChangeText={(attempts) =>
                     setDraft((prev) => ({ ...prev, attempts }))
@@ -1018,6 +1055,9 @@ export default function SkillDetailScreen() {
                   keyboardType="numeric"
                   placeholder="Enter attempts"
                   placeholderTextColor={t.mutedText}
+                  returnKeyType="next"
+                  submitBehavior="submit"
+                  onSubmitEditing={() => notesInputRef.current?.focus()}
                   style={[
                     styles.input,
                     {
@@ -1030,6 +1070,7 @@ export default function SkillDetailScreen() {
               )}
 
               <TextInput
+                ref={notesInputRef}
                 value={draft.notes}
                 onChangeText={(notes) =>
                   setDraft((prev) => ({ ...prev, notes }))
@@ -1480,6 +1521,11 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
+  },
+  logTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   logTitle: {
     fontSize: 13.5,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -13,12 +13,13 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { usePathname } from "expo-router";
-import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import type { BottomTabBarProps } from "expo-router/js-tabs";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/src/theme/theme";
+import { usePendingShareCount } from "@/src/features/train/hooks/usePendingShareCount";
 
 export const CUSTOM_TAB_BAR_COLLAPSED_HEIGHT = 66;
 export const CUSTOM_TAB_BAR_EXPANDED_HEIGHT = 72;
@@ -222,20 +223,29 @@ type CompactTabButtonProps = {
   icon: keyof typeof Ionicons.glyphMap;
   textColor: string;
   palette: Palette;
-  onPress: () => void;
+  routeName: string;
+  isFocused: boolean;
+  showBadge?: boolean;
+  onPress: (routeName: string, isFocused: boolean) => void;
 };
 
-function CompactTabButton({
+const CompactTabButton = memo(function CompactTabButton({
   label,
   icon,
   textColor,
   palette,
+  routeName,
+  isFocused,
+  showBadge,
   onPress,
 }: CompactTabButtonProps) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => onPress(routeName, isFocused)}
       hitSlop={8}
+      accessibilityRole="tab"
+      accessibilityLabel={showBadge ? `${label}, has pending activity` : label}
+      accessibilityState={{ selected: isFocused }}
       style={({ pressed }) => [
         styles.compactTabButton,
         {
@@ -246,7 +256,10 @@ function CompactTabButton({
         },
       ]}
     >
-      <Ionicons name={getFocusedIcon(icon)} size={17} color={textColor} />
+      <View style={styles.tabIconWrap}>
+        <Ionicons name={getFocusedIcon(icon)} size={17} color={textColor} />
+        {showBadge ? <View style={[styles.tabBadgeDot, { borderColor: palette.chipFocusedBg }]} /> : null}
+      </View>
 
       <Text
         numberOfLines={1}
@@ -256,7 +269,7 @@ function CompactTabButton({
       </Text>
     </Pressable>
   );
-}
+});
 
 type TimerCardLayoutProps = {
   title: string;
@@ -367,7 +380,7 @@ type UtilityTimerCardProps = {
   activeDotColor: string;
 };
 
-function UtilityTimerCard({
+const UtilityTimerCard = memo(function UtilityTimerCard({
   title,
   isRunning,
   elapsedSeconds,
@@ -394,6 +407,8 @@ function UtilityTimerCard({
           <Pressable
             onPress={onToggle}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={isRunning ? "Pause workout timer" : "Start workout timer"}
             style={({ pressed }) => [
               styles.timerActionButton,
               {
@@ -418,6 +433,8 @@ function UtilityTimerCard({
           <Pressable
             onPress={onReset}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Reset workout timer"
             style={({ pressed }) => [
               styles.resetButton,
               {
@@ -434,7 +451,7 @@ function UtilityTimerCard({
       }
     />
   );
-}
+});
 
 type RestTimerCardProps = {
   isRunning: boolean;
@@ -449,7 +466,7 @@ type RestTimerCardProps = {
   activeDotColor: string;
 };
 
-function RestTimerCard({
+const RestTimerCard = memo(function RestTimerCard({
   isRunning,
   remainingSeconds,
   totalSeconds,
@@ -522,6 +539,8 @@ function RestTimerCard({
           <Pressable
             onPress={onOpenPicker}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Set rest timer duration"
             style={({ pressed }) => [
               styles.timerActionButton,
               {
@@ -542,6 +561,8 @@ function RestTimerCard({
           <Pressable
             onPress={onReset}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Reset rest timer"
             style={({ pressed }) => [
               styles.resetButton,
               {
@@ -602,7 +623,7 @@ function RestTimerCard({
       }
     />
   );
-}
+});
 
 type ExpandedTabButtonProps = {
   label: string;
@@ -611,16 +632,20 @@ type ExpandedTabButtonProps = {
   textColor: string;
   mutedColor: string;
   palette: Palette;
-  onPress: () => void;
+  routeName: string;
+  showBadge?: boolean;
+  onPress: (routeName: string, focused: boolean) => void;
 };
 
-function ExpandedTabButton({
+const ExpandedTabButton = memo(function ExpandedTabButton({
   label,
   icon,
   focused,
   textColor,
   mutedColor,
   palette,
+  routeName,
+  showBadge,
   onPress,
 }: ExpandedTabButtonProps) {
   const color = focused ? textColor : mutedColor;
@@ -628,8 +653,11 @@ function ExpandedTabButton({
 
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => onPress(routeName, focused)}
       hitSlop={8}
+      accessibilityRole="tab"
+      accessibilityLabel={showBadge ? `${label}, has pending activity` : label}
+      accessibilityState={{ selected: focused }}
       style={({ pressed }) => [
         styles.expandedTabButton,
         {
@@ -643,7 +671,17 @@ function ExpandedTabButton({
       ]}
     >
       <View style={styles.expandedTabInner}>
-        <Ionicons name={finalIcon} size={16} color={color} />
+        <View style={styles.tabIconWrap}>
+          <Ionicons name={finalIcon} size={16} color={color} />
+          {showBadge ? (
+            <View
+              style={[
+                styles.tabBadgeDot,
+                { borderColor: focused ? palette.chipFocusedBg : palette.chipBg },
+              ]}
+            />
+          ) : null}
+        </View>
 
         <Text numberOfLines={1} style={[styles.expandedTabLabel, { color }]}>
           {label}
@@ -651,7 +689,7 @@ function ExpandedTabButton({
       </View>
     </Pressable>
   );
-}
+});
 
 type StepperPickerProps = {
   label: string;
@@ -664,7 +702,7 @@ type StepperPickerProps = {
   palette: Palette;
 };
 
-function StepperPicker({
+const StepperPicker = memo(function StepperPicker({
   label,
   value,
   onChange,
@@ -739,7 +777,7 @@ function StepperPicker({
       </Pressable>
     </View>
   );
-}
+});
 
 export default function CustomTabBar(props: BottomTabBarProps) {
   const pathname = usePathname();
@@ -763,6 +801,7 @@ function CustomTabBarInner({
   const t = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const pendingShareCount = usePendingShareCount();
 
   const bottomDockInset = getBottomDockInset(insets.bottom);
 
@@ -856,12 +895,12 @@ function CustomTabBarInner({
 
   const shouldScrollExpanded = visibleRoutes.length > visibleTabs;
 
-  const stopRestDoneHaptics = () => {
+  const stopRestDoneHaptics = useCallback(() => {
     if (restDoneIntervalRef.current) {
       clearInterval(restDoneIntervalRef.current);
       restDoneIntervalRef.current = null;
     }
-  };
+  }, []);
 
   const clearExpandedAutoCollapse = useCallback(() => {
     if (expandedCollapseTimeoutRef.current) {
@@ -1140,18 +1179,18 @@ function CustomTabBarInner({
     };
   }, [clearExpandedAutoCollapse]);
 
-  const handleWorkoutToggle = async () => {
+  const handleWorkoutToggle = useCallback(async () => {
     await lightTap();
     setWorkoutRunning((prev) => !prev);
-  };
+  }, []);
 
-  const handleWorkoutReset = async () => {
+  const handleWorkoutReset = useCallback(async () => {
     await softImpact();
     setWorkoutRunning(false);
     setWorkoutSeconds(0);
-  };
+  }, []);
 
-  const handleRestReset = async () => {
+  const handleRestReset = useCallback(async () => {
     await softImpact();
     stopRestDoneHaptics();
     setRestRunning(false);
@@ -1159,9 +1198,9 @@ function CustomTabBarInner({
     setRestRemainingSeconds(0);
     setDraftMinutes(0);
     setDraftSeconds(0);
-  };
+  }, [stopRestDoneHaptics]);
 
-  const handleOpenRestPicker = async () => {
+  const handleOpenRestPicker = useCallback(async () => {
     await lightTap();
     const sourceSeconds =
       restRemainingSeconds > 0 ? restRemainingSeconds : restDurationSeconds;
@@ -1172,14 +1211,14 @@ function CustomTabBarInner({
     }
 
     setRestPickerVisible(true);
-  };
+  }, [restRemainingSeconds, restDurationSeconds]);
 
-  const handleCancelRestPicker = async () => {
+  const handleCancelRestPicker = useCallback(async () => {
     await lightTap();
     setRestPickerVisible(false);
-  };
+  }, []);
 
-  const handleStartFromPicker = async () => {
+  const handleStartFromPicker = useCallback(async () => {
     await softImpact();
     const total = draftMinutes * 60 + draftSeconds;
     if (total <= 0) return;
@@ -1189,7 +1228,7 @@ function CustomTabBarInner({
     setRestRemainingSeconds(total);
     setRestRunning(true);
     setRestPickerVisible(false);
-  };
+  }, [draftMinutes, draftSeconds, stopRestDoneHaptics]);
 
   const handleExpandedInteractionStart = () => {
     if (!expanded) return;
@@ -1201,44 +1240,47 @@ function CustomTabBarInner({
     scheduleExpandedAutoCollapse();
   };
 
-  const handleTabPress = async (routeName: string, isFocused: boolean) => {
-    const normalizedTarget = normalizeRouteName(routeName);
-    const route = state.routes.find(
-      (r) => normalizeRouteName(r.name) === normalizedTarget
-    );
+  const handleTabPress = useCallback(
+    async (routeName: string, isFocused: boolean) => {
+      const normalizedTarget = normalizeRouteName(routeName);
+      const route = state.routes.find(
+        (r) => normalizeRouteName(r.name) === normalizedTarget
+      );
 
-    if (!route) return;
+      if (!route) return;
 
-    const event = navigation.emit({
-      type: "tabPress",
-      target: route.key,
-      canPreventDefault: true,
-    });
-
-    if (event.defaultPrevented) return;
-
-    if (isFocused) {
-      await lightTap();
-      triggerDockPressFeel();
-
-      setExpanded((prev) => {
-        const next = !prev;
-
-        if (!next) {
-          clearExpandedAutoCollapse();
-        }
-
-        return next;
+      const event = navigation.emit({
+        type: "tabPress",
+        target: route.key,
+        canPreventDefault: true,
       });
 
-      return;
-    }
+      if (event.defaultPrevented) return;
 
-    await softImpact();
-    clearExpandedAutoCollapse();
-    setExpanded(false);
-    navigation.navigate(normalizedTarget as never);
-  };
+      if (isFocused) {
+        await lightTap();
+        triggerDockPressFeel();
+
+        setExpanded((prev) => {
+          const next = !prev;
+
+          if (!next) {
+            clearExpandedAutoCollapse();
+          }
+
+          return next;
+        });
+
+        return;
+      }
+
+      await softImpact();
+      clearExpandedAutoCollapse();
+      setExpanded(false);
+      navigation.navigate(normalizedTarget as never);
+    },
+    [state.routes, navigation, triggerDockPressFeel, clearExpandedAutoCollapse]
+  );
 
   const animatedHeight = containerAnim.interpolate({
     inputRange: [0, 1],
@@ -1295,7 +1337,7 @@ function CustomTabBarInner({
           <BlurView
             intensity={palette.isDark ? 54 : 72}
             tint={palette.blurTint}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
           />
 
           <Animated.View
@@ -1324,9 +1366,10 @@ function CustomTabBarInner({
                 icon={currentMeta.icon}
                 textColor={t.text}
                 palette={palette}
-                onPress={() =>
-                  handleTabPress(normalizeRouteName(currentRoute.name), true)
-                }
+                routeName={normalizeRouteName(currentRoute.name)}
+                isFocused
+                showBadge={pendingShareCount > 0 && normalizeRouteName(currentRoute.name).startsWith("train")}
+                onPress={handleTabPress}
               />
             </View>
 
@@ -1438,7 +1481,9 @@ function CustomTabBarInner({
                       textColor={t.text}
                       mutedColor={t.mutedText}
                       palette={palette}
-                      onPress={() => handleTabPress(normalized, isFocused)}
+                      routeName={normalized}
+                      showBadge={pendingShareCount > 0 && normalized.startsWith("train")}
+                      onPress={handleTabPress}
                     />
                   </View>
                 );
@@ -1479,7 +1524,7 @@ function CustomTabBarInner({
             <BlurView
               intensity={palette.isDark ? 48 : 70}
               tint={palette.blurTint}
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
             />
 
             <View
@@ -1624,7 +1669,7 @@ const styles = StyleSheet.create({
   },
 
   glassBorder: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderWidth: 1,
   },
 
@@ -1636,7 +1681,7 @@ const styles = StyleSheet.create({
   },
 
   expandedLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     top: 7,
     left: 7,
     right: 7,
@@ -1682,6 +1727,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.15,
     textAlign: "center",
+  },
+
+  tabIconWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  tabBadgeDot: {
+    position: "absolute",
+    top: -2,
+    right: -3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    backgroundColor: "#ff453a",
   },
 
   timerCard: {
@@ -1850,7 +1911,7 @@ const styles = StyleSheet.create({
   },
 
   modalInnerBorder: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderWidth: 1,
     borderRadius: 24,
   },

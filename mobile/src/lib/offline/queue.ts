@@ -2,6 +2,11 @@ import { STORAGE_KEYS } from "./storage-keys";
 import { readJson, writeJson } from "./storage";
 import type { PendingAction } from "./types";
 
+// After this many failed sync attempts, stop auto-retrying an action on every
+// reconnect. It stays in storage (data is never dropped) but is skipped by
+// flushPendingActions until something else removes or replaces it.
+export const MAX_SYNC_RETRIES = 5;
+
 export async function getPendingActions(): Promise<PendingAction[]> {
   return readJson<PendingAction[]>(STORAGE_KEYS.PENDING_ACTIONS, []);
 }
@@ -16,11 +21,16 @@ export async function enqueueAction(action: PendingAction): Promise<void> {
   await setPendingActions(next);
 }
 
+export async function removePendingAction(id: string): Promise<void> {
+  const current = await getPendingActions();
+  await setPendingActions(current.filter((action) => action.id !== id));
+}
+
 export async function clearPendingActions(): Promise<void> {
   await writeJson(STORAGE_KEYS.PENDING_ACTIONS, []);
 }
 
-function mergeAction(
+export function mergeAction(
   current: PendingAction[],
   incoming: PendingAction
 ): PendingAction[] {

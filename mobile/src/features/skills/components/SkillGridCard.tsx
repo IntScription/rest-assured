@@ -263,6 +263,20 @@ export default function SkillGridCard({
           </View>
 
           <View style={styles.topRightRow}>
+            {item.isNewBest && item.latestLog ? (
+              <View
+                style={[
+                  styles.favoriteBadge,
+                  {
+                    backgroundColor: "#F59E0B22",
+                    borderColor: "#F59E0B55",
+                  },
+                ]}
+              >
+                <Ionicons name="trophy" size={12} color="#F59E0B" />
+              </View>
+            ) : null}
+
             {isFavorite ? (
               <View
                 style={[

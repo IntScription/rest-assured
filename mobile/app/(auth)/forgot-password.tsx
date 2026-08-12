@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -60,8 +60,16 @@ export default function ForgotPasswordScreen() {
 
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const emailInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => emailInputRef.current?.focus(), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleForgot = async () => {
+    if (loading) return;
+
     const trimmedEmail = email.trim();
 
     if (!trimmedEmail) {
@@ -154,12 +162,15 @@ export default function ForgotPasswordScreen() {
         ]}
       >
         <TextInput
+          ref={emailInputRef}
           placeholder="Email"
           autoCapitalize="none"
           keyboardType="email-address"
           placeholderTextColor={t.mutedText}
           value={email}
           onChangeText={setEmail}
+          returnKeyType="send"
+          onSubmitEditing={handleForgot}
           style={[
             styles.input,
             {

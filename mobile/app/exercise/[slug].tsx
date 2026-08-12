@@ -9,24 +9,28 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   Animated,
   Easing,
 } from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
-import { useFocusEffect } from "@react-navigation/native";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { format } from "date-fns";
 
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
 import { useIsOnline } from "@/hooks/use-is-online";
 import { cacheGetJson, cacheKey, cacheSetJson } from "@/src/lib/offline-cache";
+import { enqueueAction, removePendingAction } from "@/src/lib/offline/queue";
+import { logError, logWarn } from "@/src/lib/logger";
+import { flushPendingActions } from "@/src/lib/offline/sync";
+import type { CachedLog } from "@/src/lib/offline/types";
 import OnboardingBanner from "@/src/components/OnboardingBanner";
+import { useLatestCallback } from "@/src/hooks/useLatestCallback";
 import {
   getOnboardingStep,
   isOnboardingActive,
@@ -35,7 +39,15 @@ import {
 
 import ExerciseBackground from "@/src/features/exercise/components/ExerciseBackground";
 import ExerciseHeader from "@/src/features/exercise/components/ExerciseHeader";
+import ProgressGraphCard from "@/src/features/exercise/components/ProgressGraphCard";
+import { ExerciseInsightSheet } from "@/src/features/home/components/ExerciseInsightSheet";
+import { getExerciseRoutePreview } from "@/src/features/home/utils/exerciseRouteCache";
+import {
+  getExercisePrefsPreview,
+  setExercisePrefsPreview,
+} from "@/src/features/exercise/utils/exercisePrefsCache";
 import TrainingSummaryDeck from "@/src/features/exercise/components/TrainingSummaryDeck";
+import { useRestTimer } from "@/src/features/exercise/hooks/useRestTimer";
 import QuickLoggerCard from "@/src/features/exercise/components/QuickLoggerCard";
 import {
   APPROX_LOG_CARD_HEIGHT,
@@ -53,7 +65,6 @@ import type {
   LogMarkers,
   LogRow,
   LogTag,
-  PendingLogPayload,
   RecordShortcut,
   SessionSummary,
   SplitRowLite,
@@ -83,12 +94,12 @@ import {
   sanitizeIntegerInput,
 } from "@/src/features/exercise/utils/formatters";
 import { getCoachNextSetInsight } from "@/src/features/exercise/utils/coachNextSetInsight";
+import { detectPlateau } from "@/src/features/exercise/utils/plateauDetection";
 import {
   getCurrentPrOwners,
   getLogAchievement,
   getPrBoardItems,
   getPrFlags,
-  getTodayLogIds,
 } from "@/src/features/exercise/utils/prLogic";
 import {
   getProgressInsight,
@@ -138,6 +149,65 @@ function sameTheme(a: ReturnType<typeof useAppTheme>, b: ReturnType<typeof useAp
     a.secondaryText === b.secondaryText &&
     a.danger === b.danger
   );
+}
+
+function getTodayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = `${now.getMonth() + 1}`.padStart(2, "0");
+  const day = `${now.getDate()}`.padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeRouteDate(value?: string | string[]) {
+  const raw = Array.isArray(value) ? value[0] : value;
+
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  return getTodayDateString();
+}
+
+function isFutureDateString(dateString: string) {
+  return dateString.localeCompare(getTodayDateString()) > 0;
+}
+
+function getDatePart(value?: string | null) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+function getTrainingDate(log?: Partial<LogRow> & { log_date?: string | null } | null) {
+  if (!log) return getTodayDateString();
+
+  const logDate = getDatePart(log.log_date);
+  const createdDate = getDatePart(log.created_at);
+  const today = getTodayDateString();
+
+  /**
+   * Safety guard for old rows after the log_date migration:
+   * some existing March/April logs can accidentally have log_date = today
+   * because the new column defaulted to current_date.
+   * If created_at is older than today, trust created_at for those legacy rows.
+   */
+  if (logDate === today && createdDate && createdDate < today) {
+    return createdDate;
+  }
+
+  if (logDate) return logDate;
+  if (createdDate) return createdDate;
+  return today;
+}
+
+function sortLogsByTrainingDateDesc<T extends Partial<LogRow> & { log_date?: string | null }>(items: T[]) {
+  return [...items].sort((a, b) => {
+    const dateCompare = getTrainingDate(b).localeCompare(getTrainingDate(a));
+    if (dateCompare !== 0) return dateCompare;
+
+    return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+  });
 }
 
 const LogListCard = memo(function LogListCard({
@@ -201,7 +271,7 @@ const LogListCard = memo(function LogListCard({
             <Text style={[styles.logText, { color: t.text }]}>{formatLogLine(item)}</Text>
           </View>
 
-          <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(item.created_at)}</Text>
+          <Text style={[styles.logDate, { color: t.mutedText }]}>{formatLogDate(getTrainingDate(item))}</Text>
           <View style={styles.logMetaRow}>
             <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
               <Text style={[styles.logMetaChipText, { color: t.text }]}>
@@ -214,6 +284,14 @@ const LogListCard = memo(function LogListCard({
                 Vol {Number(item.volume ?? 0)}
               </Text>
             </View>
+
+            {item.rpe ? (
+              <View style={[styles.logMetaChip, { backgroundColor: t.cardAlt, borderColor: t.border }]}>
+                <Text style={[styles.logMetaChipText, { color: t.text }]}>
+                  RPE {item.rpe}
+                </Text>
+              </View>
+            ) : null}
 
             <View style={styles.logIndicatorRow}>
               {markers.isCurrentHeaviest || markers.isPreviousHeaviest ? (
@@ -244,7 +322,7 @@ const LogListCard = memo(function LogListCard({
                 : markers.isCurrentVolume
                   ? "Current volume PR"
                   : markers.isCurrentRep
-                    ? "Current bodyweight rep PR"
+                    ? "Current rep PR"
                     : markers.isSessionBest
                       ? "Session best"
                       : markers.isTodayHeaviest
@@ -337,9 +415,20 @@ export default function ExerciseScreen() {
     tourStep?: string;
     tutorialProgramId?: string;
     programId?: string;
+    selectedDate?: string | string[];
+    logDate?: string | string[];
+    openLog?: string | string[];
   }>();
   const slug = params?.slug;
   const quickLog = params?.quickLog === "true";
+  const openLogFromCalendar = Array.isArray(params?.openLog)
+    ? params.openLog[0] === "true"
+    : params?.openLog === "true";
+  const shouldAutoFocusLogger = quickLog || openLogFromCalendar;
+  const selectedLogDate = useMemo(
+    () => normalizeRouteDate(params?.logDate ?? params?.selectedDate),
+    [params?.logDate, params?.selectedDate]
+  );
   const incomingTourStep = params?.tourStep;
   const tutorialProgramId = params?.tutorialProgramId;
   const fallbackProgramId = params?.programId;
@@ -348,30 +437,47 @@ export default function ExerciseScreen() {
   const [tourActive, setTourActive] = useState(false);
   const [tourStep, setTourStep] = useState<string>("idle");
 
+  const previewExercise = getExerciseRoutePreview(slug)?.exercise ?? null;
+  const previewPrefs = getExercisePrefsPreview(previewExercise?.id);
+
   const [user, setUser] = useState<any>(null);
-  const [exercise, setExercise] = useState<ExerciseRow | null>(null);
+  const [exercise, setExercise] = useState<ExerciseRow | null>(() => previewExercise);
   const [splitName, setSplitName] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogRow[]>([]);
-  const [newLog, setNewLog] = useState({ weight: "", reps: "", sets: "", note: "" });
-  const [logTag, setLogTag] = useState<LogTag>("working");
+  const [newLog, setNewLog] = useState(() => {
+    const previewLatest = quickLog ? getExerciseRoutePreview(slug)?.latestLog : null;
+    if (!previewLatest) return { weight: "", reps: "", sets: "", note: "", rpe: "" };
+
+    return {
+      weight: previewLatest.weight && Number(previewLatest.weight) > 0 ? String(previewLatest.weight) : "",
+      reps: String(previewLatest.reps ?? ""),
+      sets: String(previewLatest.sets ?? ""),
+      note: "",
+      rpe: "",
+    };
+  });
+  const [logTag, setLogTag] = useState<LogTag>(() => previewPrefs?.defaultTag ?? "working");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getExerciseRoutePreview(slug));
   const [formError, setFormError] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
-  const [restSecondsLeft, setRestSecondsLeft] = useState(0);
-  const [restDuration, setRestDuration] = useState(120);
+  const [isSaving, setIsSaving] = useState(false);
+  const { restDuration, setRestDuration, restSecondsLeft, startRest } = useRestTimer(
+    previewPrefs?.restDuration ?? 120
+  );
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
   const [sessionLogIds, setSessionLogIds] = useState<string[]>([]);
   const [sessionVolume, setSessionVolume] = useState(0);
   const [finishedSessionSummary, setFinishedSessionSummary] = useState<SessionSummary | null>(null);
   const [logFilter, setLogFilter] = useState<LogFilter>("all");
   const [logSearch, setLogSearch] = useState("");
-  const [trendMetric, setTrendMetric] = useState<TrendMetric>("volume");
-  const [trendView, setTrendView] = useState<TrendView>("graph");
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>(() => previewPrefs?.trendMetric ?? "volume");
+  const [trendView, setTrendView] = useState<TrendView>(() => previewPrefs?.trendView ?? "graph");
+  const [insightSheetVisible, setInsightSheetVisible] = useState(false);
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [latestTut, setLatestTut] = useState<TutPreviewRow | null>(null);
   const [tutPreviewLoading, setTutPreviewLoading] = useState(false);
-  const [weightJump, setWeightJump] = useState(2.5);
+  const [weightJump, setWeightJump] = useState(() => previewPrefs?.weightJump ?? 2.5);
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
 
   const listRef = useRef<FlatList<LogRow> | null>(null);
@@ -381,19 +487,28 @@ export default function ExerciseScreen() {
   const bubbleTwoAnim = useRef(new Animated.Value(0)).current;
   const bubbleThreeAnim = useRef(new Animated.Value(0)).current;
 
-  const scrollToLogger = () => {
+  const scrollToLogger = useCallback(() => {
     const target = Math.max(0, loggerAnchorY.current - 16);
     requestAnimationFrame(() => {
       listRef.current?.scrollToOffset({ offset: target, animated: true });
     });
-  };
+  }, []);
 
-  const scrollToAdvancedInsights = () => {
+  const scrollToAdvancedInsights = useCallback(() => {
     const target = Math.max(0, advancedInsightsAnchorY.current - 16);
     requestAnimationFrame(() => {
       listRef.current?.scrollToOffset({ offset: target, animated: true });
     });
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!openLogFromCalendar) return;
+
+    setStatusMsg(`Logging for ${formatLogDate(selectedLogDate)}.`);
+    const timer = setTimeout(scrollToLogger, 220);
+
+    return () => clearTimeout(timer);
+  }, [openLogFromCalendar, selectedLogDate, scrollToLogger]);
 
   useEffect(() => {
     const loops = [
@@ -494,7 +609,6 @@ export default function ExerciseScreen() {
   });
 
   const cacheId = user?.id && slug ? cacheKey(["exercise", user.id, slug]) : null;
-  const pendingQueueKey = user?.id && exercise?.id ? cacheKey(["exercise-pending", user.id, exercise.id]) : null;
   const prefsKey = user?.id && exercise?.id ? cacheKey(["exercise-prefs", user.id, exercise.id]) : null;
 
   useFocusEffect(
@@ -565,8 +679,12 @@ export default function ExerciseScreen() {
           if (cached?.logs) setLogs(cached.logs);
           if (typeof cached?.splitName === "string") setSplitName(cached.splitName);
 
+          // Cached data (from disk, or from the instant in-memory preview
+          // set on tap) is enough to render — stop blocking on it here and
+          // let the network fetch below refresh silently in the background.
+          if (cached?.exercise) setLoading(false);
+
           if (!isOnline && cached) {
-            setLoading(false);
             return;
           }
         }
@@ -581,13 +699,13 @@ export default function ExerciseScreen() {
         if (!active) return;
 
         if (error) {
-          console.error(error);
+          logError("exercise.fetch", error);
           setExercise(null);
         } else {
           setExercise((data as ExerciseRow) ?? null);
         }
       } catch (err) {
-        console.error(err);
+        logError("exercise.fetch", err);
       } finally {
         if (active) setLoading(false);
       }
@@ -615,7 +733,7 @@ export default function ExerciseScreen() {
 
       if (!active) return;
       if (error) {
-        console.warn(error);
+        logWarn("exercise.fetchSplit", error.message, { splitId: exercise.split_id });
         return;
       }
       setSplitName((data as SplitRowLite | null)?.name ?? null);
@@ -653,7 +771,7 @@ export default function ExerciseScreen() {
       if (!active) return;
 
       if (error) {
-        console.warn("Failed to load TUT preview", error);
+        logWarn("exercise.fetchTutPreview", error.message);
         setLatestTut(null);
       } else {
         setLatestTut((data as TutPreviewRow | null) ?? null);
@@ -682,6 +800,7 @@ export default function ExerciseScreen() {
       setTrendMetric(prefs.trendMetric ?? "volume");
       setTrendView(prefs.trendView ?? "graph");
       setWeightJump(prefs.weightJump ?? 2.5);
+      if (exercise?.id) setExercisePrefsPreview(exercise.id, prefs);
     };
 
     void loadPrefs();
@@ -689,18 +808,20 @@ export default function ExerciseScreen() {
     return () => {
       active = false;
     };
-  }, [prefsKey]);
+  }, [prefsKey, setRestDuration]);
 
   useEffect(() => {
     if (!prefsKey) return;
-    void cacheSetJson(prefsKey, {
+    const prefs: ExercisePrefs = {
       defaultTag: logTag,
       restDuration,
       trendMetric,
       trendView,
       weightJump,
-    });
-  }, [prefsKey, logTag, restDuration, trendMetric, trendView, weightJump]);
+    };
+    void cacheSetJson(prefsKey, prefs);
+    if (exercise?.id) setExercisePrefsPreview(exercise.id, prefs);
+  }, [prefsKey, logTag, restDuration, trendMetric, trendView, weightJump, exercise?.id]);
 
   useEffect(() => {
     if (!exercise?.id || !user?.id || !isOnline) return;
@@ -710,21 +831,27 @@ export default function ExerciseScreen() {
     const splitNameForCache = splitName;
 
     const fetchLogs = async () => {
+      // Flush any queued offline writes before reading — otherwise this fetch
+      // can race a pending log.create and show a stale list.
+      await flushPendingActions();
+      if (!active) return;
+
       const { data, error } = await supabase
         .from("logs")
         .select("*")
         .eq("exercise_id", exerciseForCache.id)
         .eq("user_id", user.id)
+        .order("log_date", { ascending: false })
         .order("created_at", { ascending: false });
 
       if (!active) return;
 
       if (error) {
-        console.warn(error);
+        logWarn("exercise.fetchLogs", error.message, { exerciseId: exerciseForCache.id });
         return;
       }
 
-      const nextLogs = (data ?? []) as LogRow[];
+      const nextLogs = sortLogsByTrainingDateDesc((data ?? []) as LogRow[]);
       setLogs(nextLogs);
 
       if (cacheId) {
@@ -752,6 +879,7 @@ export default function ExerciseScreen() {
       reps: String(latest.reps ?? ""),
       sets: String(latest.sets ?? ""),
       note: "",
+      rpe: "",
     });
     setStatusMsg("Quick log ready.");
   }, [quickLog, logs, editingId]);
@@ -760,85 +888,6 @@ export default function ExerciseScreen() {
     if (!cacheId || !exercise) return;
     void cacheSetJson(cacheId, { exercise, logs, splitName });
   }, [cacheId, exercise, logs, splitName]);
-
-  useEffect(() => {
-    if (restSecondsLeft <= 0) return;
-
-    const timer = setInterval(() => {
-      setRestSecondsLeft((prev) => {
-        if (prev <= 1) {
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [restSecondsLeft]);
-
-  useEffect(() => {
-    if (!pendingQueueKey || !exercise?.id || !user?.id || !isOnline) return;
-
-    let active = true;
-
-    const syncPending = async () => {
-      const queue = (await cacheGetJson<PendingLogPayload[]>(pendingQueueKey)) ?? [];
-      if (!active || queue.length === 0) return;
-
-      const sortedQueue = [...queue].sort((a, b) => a.created_at.localeCompare(b.created_at));
-      const syncedLocalIds: string[] = [];
-      const insertedLogs: LogRow[] = [];
-
-      for (const item of sortedQueue) {
-        const { data, error } = await supabase
-          .from("logs")
-          .insert([
-            {
-              weight: item.weight,
-              reps: item.reps,
-              sets: item.sets,
-              exercise_id: exercise.id,
-              user_id: user.id,
-              volume: item.volume,
-              day: item.day,
-              type: item.type,
-              created_at: item.created_at,
-            },
-          ])
-          .select()
-          .maybeSingle();
-
-        if (error) {
-          console.error("Pending sync failed", error);
-          continue;
-        }
-
-        if (data) {
-          syncedLocalIds.push(item.local_temp_id);
-          insertedLogs.push(data as LogRow);
-        }
-      }
-
-      if (syncedLocalIds.length === 0) return;
-
-      const remaining = queue.filter((item) => !syncedLocalIds.includes(item.local_temp_id));
-      await cacheSetJson(pendingQueueKey, remaining);
-
-      setLogs((prev) => {
-        const withoutPending = prev.filter((log) => !syncedLocalIds.includes(log.local_temp_id ?? ""));
-        return [...insertedLogs.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "")), ...withoutPending];
-      });
-
-      setStatusMsg("Pending logs synced.");
-    };
-
-    void syncPending();
-
-    return () => {
-      active = false;
-    };
-  }, [pendingQueueKey, exercise?.id, user?.id, isOnline]);
 
   const workingLogs = useMemo(() => logs.filter((log) => getLogTag(log) !== "warmup"), [logs]);
 
@@ -863,7 +912,7 @@ export default function ExerciseScreen() {
           acc.bestVolumeLog = log;
         }
 
-        acc.bodyweightRepPR = Math.max(acc.bodyweightRepPR, weight <= 0 ? reps : 0);
+        acc.bestReps = Math.max(acc.bestReps, reps);
         return acc;
       },
       {
@@ -874,7 +923,7 @@ export default function ExerciseScreen() {
         totalSessions: workingLogs.length,
         bestEstimated1RM: 0,
         bestVolumeLog: null as LogRow | null,
-        bodyweightRepPR: 0,
+        bestReps: 0,
       }
     );
   }, [workingLogs]);
@@ -905,7 +954,10 @@ export default function ExerciseScreen() {
   const logPrFlags = useMemo(() => getPrFlags(logs), [logs]);
   const currentPrOwners = useMemo(() => getCurrentPrOwners(logs), [logs]);
 
-  const todayLogs = useMemo(() => getTodayLogIds(logs), [logs]);
+  const todayLogs = useMemo(() => {
+    const today = getTodayDateString();
+    return logs.filter((log) => getTrainingDate(log) === today);
+  }, [logs]);
   const todayHeaviestId = useMemo(() => {
     if (todayLogs.length === 0) return null;
     return [...todayLogs].sort((a, b) => Number(b.weight ?? 0) - Number(a.weight ?? 0))[0]?.id ?? null;
@@ -928,13 +980,18 @@ export default function ExerciseScreen() {
     if (logSearch.trim()) return searched;
 
     return searched.filter((log, index) => {
-      const month = getMonthLabel(log.created_at);
+      const month = getMonthLabel(getTrainingDate(log));
       return !collapsedMonths[month] || index === 0;
     });
   }, [logs, logFilter, logSearch, collapsedMonths]);
 
 
-  const trendCallouts = useMemo(() => getTrendCallouts(workingLogs), [workingLogs]);
+  const plateauResult = useMemo(() => detectPlateau(workingLogs, logPrFlags), [workingLogs, logPrFlags]);
+
+  const trendCallouts = useMemo(() => {
+    const callouts = getTrendCallouts(workingLogs);
+    return plateauResult.isPlateaued ? [plateauResult.message, ...callouts] : callouts;
+  }, [workingLogs, plateauResult]);
 
 
   const scrollToLogCard = useCallback(
@@ -989,6 +1046,7 @@ export default function ExerciseScreen() {
             sets: String(baseSets),
           }));
           setStatusMsg("Repeated last working suggestion.");
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       },
       {
@@ -998,6 +1056,7 @@ export default function ExerciseScreen() {
         apply: () => {
           setNewLog((prev) => ({ ...prev, weight: addWeight(prev.weight || String(baseWeight), weightJump) }));
           setStatusMsg(`Suggested next set: +${weightJump} kg.`);
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       },
       {
@@ -1007,6 +1066,7 @@ export default function ExerciseScreen() {
         apply: () => {
           setNewLog((prev) => ({ ...prev, reps: addInteger(prev.reps || String(baseReps), 1) }));
           setStatusMsg("Suggested next set: +1 rep.");
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       },
       {
@@ -1016,6 +1076,7 @@ export default function ExerciseScreen() {
         apply: () => {
           setNewLog((prev) => ({ ...prev, sets: addInteger(prev.sets || String(baseSets), 1) }));
           setStatusMsg("Suggested next set: +1 set.");
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       },
       {
@@ -1031,6 +1092,7 @@ export default function ExerciseScreen() {
             sets: String(baseSets),
           }));
           setStatusMsg("Back-off set suggestion applied.");
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       },
     ];
@@ -1058,11 +1120,12 @@ export default function ExerciseScreen() {
       restSecondsLeft,
       recentWorkingLogCount: workingLogs.length,
       daysSinceLastWorkingLog,
+      lastRpe: lastWorkingLog?.rpe ?? null,
     });
   }, [bestWorkingLog, currentVolume, lastWorkingLog, newLog.reps, newLog.sets, newLog.weight, restSecondsLeft, workingLogs.length]);
 
   const resetForm = useCallback(() => {
-    setNewLog({ weight: "", reps: "", sets: "", note: "" });
+    setNewLog({ weight: "", reps: "", sets: "", note: "", rpe: "" });
     setLogTag("working");
     setEditingId(null);
     setFormError("");
@@ -1075,6 +1138,7 @@ export default function ExerciseScreen() {
       reps: String(log.reps),
       sets: String(log.sets),
       note: log.day ?? "",
+      rpe: log.rpe ? String(log.rpe) : "",
     });
     setLogTag(getLogTag(log));
     setEditingId(null);
@@ -1082,7 +1146,7 @@ export default function ExerciseScreen() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
 
-  const handleChange = (field: "weight" | "reps" | "sets" | "note", value: string) => {
+  const handleChange = useLatestCallback((field: "weight" | "reps" | "sets" | "note" | "rpe", value: string) => {
     setStatusMsg("");
     setFormError("");
 
@@ -1094,8 +1158,29 @@ export default function ExerciseScreen() {
       setNewLog((prev) => ({ ...prev, [field]: sanitizeIntegerInput(value) }));
       return;
     }
+    if (field === "rpe") {
+      setNewLog((prev) => ({ ...prev, rpe: value }));
+      return;
+    }
     setNewLog((prev) => ({ ...prev, note: value }));
-  };
+  });
+
+  const handleTagChange = useCallback((tag: LogTag) => {
+    setLogTag(tag);
+    setStatusMsg(`${getLogTagLabel(tag)} selected.`);
+    setFormError("");
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
+  const handleRestDurationChange = useCallback((seconds: number) => {
+    setRestDuration(seconds);
+    setStatusMsg(`Rest timer set to ${formatDurationLabel(seconds)}.`);
+  }, [setRestDuration]);
+
+  const handleWeightJumpChange = useCallback((step: number) => {
+    setWeightJump(step);
+    setStatusMsg(`Default jump set to ${step} kg.`);
+  }, []);
 
   const handleEdit = useCallback((log: LogRow) => {
     setEditingId(log.id);
@@ -1104,6 +1189,7 @@ export default function ExerciseScreen() {
       reps: String(log.reps),
       sets: String(log.sets),
       note: log.day ?? "",
+      rpe: log.rpe ? String(log.rpe) : "",
     });
     setLogTag(getLogTag(log));
     setFormError("");
@@ -1142,22 +1228,25 @@ export default function ExerciseScreen() {
     setSessionStartedAt(sessionId);
     setSessionLogIds((prev) => [savedId, ...prev]);
     setSessionVolume((prev) => prev + volume);
-    if (logTag !== "warmup") setRestSecondsLeft(restDuration);
+    if (logTag !== "warmup") startRest();
 
     setNewLog((prev) => ({
       weight: keepInputs ? prev.weight : "",
       reps: keepInputs ? prev.reps : "",
       sets: keepInputs ? prev.sets : "",
       note: "",
+      rpe: "",
     }));
 
     setEditingId(null);
     setFormError("");
     setStatusMsg(message);
+    Keyboard.dismiss();
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const handleSave = async () => {
+  const handleSave = useLatestCallback(async () => {
+    if (isSaving) return;
     if (!exercise || !user?.id) return;
 
     const validationError = getValidationError(newLog.weight, newLog.reps, newLog.sets);
@@ -1166,94 +1255,123 @@ export default function ExerciseScreen() {
       return;
     }
 
-    const w = parseFloat(newLog.weight) || 0;
-    const r = parseInt(newLog.reps, 10);
-    const s = parseInt(newLog.sets, 10);
-    const volume = Math.max(1, w) * r * s;
-    const createdAt = new Date().toISOString();
-    const note = newLog.note.trim() || null;
+    if (isFutureDateString(selectedLogDate)) {
+      setFormError("You can only log workouts for today or past dates.");
+      Alert.alert(
+        "Future date blocked",
+        "You can only log workouts for today or past dates."
+      );
+      return;
+    }
 
-    const achievement = getLogAchievement(
-      { weight: w, reps: r, sets: s, volume, type: logTag },
-      logs.filter((log) => !log.pending)
-    );
+    setIsSaving(true);
+    try {
+      const w = parseFloat(newLog.weight) || 0;
+      const r = parseInt(newLog.reps, 10);
+      const s = parseInt(newLog.sets, 10);
+      const volume = Math.max(1, w) * r * s;
+      const createdAt = new Date().toISOString();
+      const note = newLog.note.trim() || null;
+      const rpe = newLog.rpe ? parseFloat(newLog.rpe) : null;
 
-    const sessionId = sessionStartedAt ?? createdAt;
+      const achievement = getLogAchievement(
+        { weight: w, reps: r, sets: s, volume, type: logTag },
+        logs.filter((log) => !log.pending)
+      );
 
-    if (!isOnline && pendingQueueKey) {
-      const localTempId = `pending-${Date.now()}`;
+      const sessionId = sessionStartedAt ?? createdAt;
 
-      const pendingLog: LogRow = {
-        id: localTempId,
-        local_temp_id: localTempId,
-        user_id: user.id,
-        exercise_id: exercise.id,
-        weight: w,
-        reps: r,
-        sets: s,
-        volume,
-        created_at: createdAt,
-        day: note,
-        type: logTag,
-        pending: true,
-      };
+      if (!isOnline) {
+        const localTempId = `pending-${Date.now()}`;
 
-      const existingQueue = (await cacheGetJson<PendingLogPayload[]>(pendingQueueKey)) ?? [];
-      await cacheSetJson(pendingQueueKey, [
-        {
+        const pendingLog: LogRow = {
+          id: localTempId,
           local_temp_id: localTempId,
-          weight: w,
-          reps: r,
-          sets: s,
-          volume,
-          day: note,
-          type: logTag,
-          created_at: createdAt,
-        },
-        ...existingQueue,
-      ]);
-
-      setLogs((prev) => [pendingLog, ...prev]);
-      afterSuccessfulSet(volume, sessionId, localTempId, "Saved offline. Will sync when connected.");
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("logs")
-      .insert([
-        {
-          weight: w,
-          reps: r,
-          sets: s,
-          exercise_id: exercise.id,
           user_id: user.id,
+          exercise_id: exercise.id,
+          weight: w,
+          reps: r,
+          sets: s,
+          volume,
+          created_at: createdAt,
+          log_date: selectedLogDate,
+          day: note,
+          type: logTag,
+          rpe,
+          pending: true,
+        } as LogRow & { log_date: string };
+
+        const payload: CachedLog = {
+          id: localTempId,
+          user_id: user.id,
+          exercise_id: exercise.id,
+          weight: w,
+          reps: r,
+          sets: s,
           volume,
           day: note,
           type: logTag,
-        },
-      ])
-      .select()
-      .maybeSingle();
+          rpe,
+          created_at: createdAt,
+          log_date: selectedLogDate,
+        };
 
-    if (error) {
-      console.error(error);
-      setFormError("Could not save log.");
-      return;
+        await enqueueAction({
+          id: localTempId,
+          type: "log.create",
+          createdAt,
+          retries: 0,
+          status: "pending",
+          payload,
+        });
+
+        setLogs((prev) => sortLogsByTrainingDateDesc([pendingLog, ...prev]));
+        afterSuccessfulSet(volume, sessionId, localTempId, "Saved offline. Will sync when connected.");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("logs")
+        .insert([
+          {
+            weight: w,
+            reps: r,
+            sets: s,
+            exercise_id: exercise.id,
+            user_id: user.id,
+            volume,
+            day: note,
+            type: logTag,
+            rpe,
+            log_date: selectedLogDate,
+          },
+        ])
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        logError("exercise.saveLog", error);
+        setFormError("Could not save log.");
+        return;
+      }
+
+      const nextLog = data as LogRow;
+      setLogs((prev) => sortLogsByTrainingDateDesc([nextLog, ...prev]));
+      afterSuccessfulSet(volume, sessionId, nextLog.id, achievement);
+
+      if (await isOnboardingActive()) {
+        await setOnboardingStep("open_advanced");
+        setTourStep("open_advanced");
+        setStatusMsg("Great. Next, open Advanced Insights.");
+        scrollToAdvancedInsights();
+      }
+    } finally {
+      setIsSaving(false);
     }
+  });
 
-    const nextLog = data as LogRow;
-    setLogs((prev) => [nextLog, ...prev]);
-    afterSuccessfulSet(volume, sessionId, nextLog.id, achievement);
-
-    if (await isOnboardingActive()) {
-      await setOnboardingStep("open_advanced");
-      setTourStep("open_advanced");
-      setStatusMsg("Great. Next, open Advanced Insights.");
-      scrollToAdvancedInsights();
-    }
-  };
-
-  const handleUpdate = async () => {
+  const handleUpdate = useLatestCallback(async () => {
+    if (isSaving) return;
     if (!exercise || !editingId || !user?.id) return;
 
     const validationError = getValidationError(newLog.weight, newLog.reps, newLog.sets);
@@ -1262,33 +1380,40 @@ export default function ExerciseScreen() {
       return;
     }
 
-    const w = parseFloat(newLog.weight) || 0;
-    const r = parseInt(newLog.reps, 10);
-    const s = parseInt(newLog.sets, 10);
-    const volume = Math.max(1, w) * r * s;
-    const note = newLog.note.trim() || null;
+    setIsSaving(true);
+    try {
+      const w = parseFloat(newLog.weight) || 0;
+      const r = parseInt(newLog.reps, 10);
+      const s = parseInt(newLog.sets, 10);
+      const volume = Math.max(1, w) * r * s;
+      const note = newLog.note.trim() || null;
+      const rpe = newLog.rpe ? parseFloat(newLog.rpe) : null;
 
-    const { data, error } = await supabase
-      .from("logs")
-      .update({ weight: w, reps: r, sets: s, volume, day: note, type: logTag })
-      .eq("id", editingId)
-      .eq("user_id", user.id)
-      .select()
-      .maybeSingle();
+      const { data, error } = await supabase
+        .from("logs")
+        .update({ weight: w, reps: r, sets: s, volume, day: note, type: logTag, rpe })
+        .eq("id", editingId)
+        .eq("user_id", user.id)
+        .select()
+        .maybeSingle();
 
-    if (error) {
-      console.error(error);
-      setFormError("Could not update log.");
-      return;
+      if (error) {
+        logError("exercise.updateLog", error);
+        setFormError("Could not update log.");
+        return;
+      }
+
+      const updated = data as LogRow;
+      setLogs((prev) => sortLogsByTrainingDateDesc(prev.map((log) => (log.id === editingId ? updated : log))));
+      setEditingId(null);
+      setFormError("");
+      setStatusMsg("Log updated.");
+      Keyboard.dismiss();
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } finally {
+      setIsSaving(false);
     }
-
-    const updated = data as LogRow;
-    setLogs((prev) => prev.map((log) => (log.id === editingId ? updated : log)));
-    setEditingId(null);
-    setFormError("");
-    setStatusMsg("Log updated.");
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
+  });
 
   const handleDelete = useCallback((id: string) => {
     Alert.alert("Delete log?", "This action cannot be undone.", [
@@ -1297,12 +1422,8 @@ export default function ExerciseScreen() {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          if (id.startsWith("pending-") && pendingQueueKey) {
-            const queue = (await cacheGetJson<PendingLogPayload[]>(pendingQueueKey)) ?? [];
-            await cacheSetJson(
-              pendingQueueKey,
-              queue.filter((item) => item.local_temp_id !== id)
-            );
+          if (id.startsWith("pending-")) {
+            await removePendingAction(id);
             setLogs((prev) => prev.filter((log) => log.id !== id));
             setStatusMsg("Pending log removed.");
             return;
@@ -1311,7 +1432,7 @@ export default function ExerciseScreen() {
           const { error } = await supabase.from("logs").delete().eq("id", id).eq("user_id", user.id);
 
           if (error) {
-            console.error(error);
+            logError("exercise.deleteLog", error);
             setFormError("Could not delete log.");
             return;
           }
@@ -1322,16 +1443,16 @@ export default function ExerciseScreen() {
         },
       },
     ]);
-  }, [pendingQueueKey, user?.id]);
+  }, [user?.id]);
 
-  const headerBack = () => {
+  const headerBack = useCallback(() => {
     if (router.canGoBack()) {
       router.back();
       return;
     }
 
     router.replace("/");
-  };
+  }, [router]);
 
   const keyExtractor = useCallback((item: LogRow) => item.id, []);
 
@@ -1346,8 +1467,8 @@ export default function ExerciseScreen() {
 
   const renderItem = useCallback(
     ({ item, index }: { item: LogRow; index: number }) => {
-      const currentMonth = getMonthLabel(item.created_at);
-      const prevMonth = index > 0 ? getMonthLabel(filteredLogs[index - 1]?.created_at) : null;
+      const currentMonth = getMonthLabel(getTrainingDate(item));
+      const prevMonth = index > 0 ? getMonthLabel(getTrainingDate(filteredLogs[index - 1])) : null;
       const showMonthHeader = index === 0 || currentMonth !== prevMonth;
       const noteExpanded = !!expandedNotes[item.id];
       const prFlags = logPrFlags[item.id] ?? { heaviest: false, volume: false, reps: false };
@@ -1612,12 +1733,33 @@ export default function ExerciseScreen() {
                 totalRepsLabel={String(dashboardMetrics.totalReps)}
                 bestEstimated1RMLabel={dashboardMetrics.bestEstimated1RM > 0 ? `${dashboardMetrics.bestEstimated1RM.toFixed(1)} kg` : "—"}
                 bestVolumeLabel={dashboardMetrics.bestVolumeLog ? String(Number(dashboardMetrics.bestVolumeLog.volume ?? 0)) : "—"}
-                bodyweightRepPRLabel={dashboardMetrics.bodyweightRepPR > 0 ? `${dashboardMetrics.bodyweightRepPR}` : "—"}
+                repPRLabel={dashboardMetrics.bestReps > 0 ? `${dashboardMetrics.bestReps}` : "—"}
                 workingSetsLabel={String(dashboardMetrics.totalSets)}
                 goalSnapshot={goalSnapshot}
                 compareInsight={currentComparableInsight}
                 trendCallouts={trendCallouts}
               />
+
+              <ProgressGraphCard
+                t={t}
+                logs={workingLogs}
+                metric={trendMetric}
+                onMetricChange={setTrendMetric}
+                view={trendView}
+                onViewChange={setTrendView}
+                onOpenFullInsights={() => setInsightSheetVisible(true)}
+              />
+
+              {insightSheetVisible ? (
+                <ExerciseInsightSheet
+                  visible={insightSheetVisible}
+                  onClose={() => setInsightSheetVisible(false)}
+                  logs={logs}
+                  exerciseName={exercise?.name ?? "Exercise"}
+                  slug={slug}
+                  t={t}
+                />
+              ) : null}
 
               <Pressable
                 onLayout={(event) => {
@@ -1678,40 +1820,26 @@ export default function ExerciseScreen() {
                   t={t}
                   editingId={editingId}
                   logTag={logTag}
-                  onTagChange={(tag) => {
-                    setLogTag(tag);
-                    setStatusMsg(`${getLogTagLabel(tag)} selected.`);
-                    setFormError("");
-                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  }}
+                  onTagChange={handleTagChange}
                   lastHint={lastLog ? `Last: ${formatLogLine(lastLog)}` : "No logs yet. Add your first set below."}
                   value={newLog}
                   onChange={handleChange}
                   currentVolume={currentVolume}
                   restDuration={restDuration}
-                  onRestDurationChange={(seconds) => {
-                    setRestDuration(seconds);
-                    setStatusMsg(`Rest timer set to ${formatDurationLabel(seconds)}.`);
-                  }}
+                  onRestDurationChange={handleRestDurationChange}
                   weightJump={weightJump}
-                  onWeightJumpChange={(step) => {
-                    setWeightJump(step);
-                    setStatusMsg(`Default jump set to ${step} kg.`);
-                  }}
+                  onWeightJumpChange={handleWeightJumpChange}
                   coachInsight={coachNextSetInsight}
-                  suggestionActions={suggestionActions.map((action) => ({
-                    ...action,
-                    apply: () => {
-                      action.apply();
-                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    },
-                  }))}
+                  suggestionActions={suggestionActions}
                   lastLabel={lastWorkingLog ? formatComparableLine(lastWorkingLog) : "—"}
                   bestLabel={bestWorkingLog ? formatComparableLine(bestWorkingLog) : "—"}
                   formError={formError}
                   statusMsg={statusMsg}
                   onSave={editingId ? handleUpdate : handleSave}
                   onCancelEdit={resetForm}
+                  saving={isSaving}
+                  autoFocusWeight={shouldAutoFocusLogger}
+                  onFocusWeight={scrollToLogger}
                 />
               </View>
 
@@ -1748,6 +1876,8 @@ export default function ExerciseScreen() {
                   placeholderTextColor={t.mutedText}
                   value={logSearch}
                   onChangeText={setLogSearch}
+                  returnKeyType="search"
+                  onSubmitEditing={() => Keyboard.dismiss()}
                   style={[
                     styles.searchInput,
                     { backgroundColor: t.cardAlt, borderColor: t.border, color: t.text },
@@ -1774,7 +1904,7 @@ export default function ExerciseScreen() {
                       <TouchableOpacity
                         activeOpacity={0.86}
                         onPress={() => {
-                          setNewLog({ weight: "", reps: "8", sets: "3", note: "" });
+                          setNewLog({ weight: "", reps: "8", sets: "3", note: "", rpe: "" });
                           setLogTag("working");
                           setStatusMsg("Bodyweight starter set ready.");
                           scrollToLogger();
@@ -1787,7 +1917,7 @@ export default function ExerciseScreen() {
                       <TouchableOpacity
                         activeOpacity={0.86}
                         onPress={() => {
-                          setNewLog({ weight: "10", reps: "5", sets: "3", note: "" });
+                          setNewLog({ weight: "10", reps: "5", sets: "3", note: "", rpe: "" });
                           setLogTag("working");
                           setStatusMsg("Weighted starter set ready.");
                           scrollToLogger();
@@ -2827,4 +2957,5 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+
 

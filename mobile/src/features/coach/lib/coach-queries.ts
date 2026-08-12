@@ -4,8 +4,8 @@ import type { CoachAskContext } from "@/src/features/coach/types/coach";
 
 export async function getCoachInputs(userId: string) {
   const today = new Date();
-  const last7Date = subDays(today, 7).toISOString().slice(0, 10);
-  const last30Iso = subDays(today, 30).toISOString();
+  const last30Date = subDays(today, 30).toISOString().slice(0, 10);
+  const last90Iso = subDays(today, 90).toISOString();
   const todayDate = today.toISOString().slice(0, 10);
 
   const [
@@ -15,6 +15,7 @@ export async function getCoachInputs(userId: string) {
     measurementsRes,
     sessionsRes,
     logsRes,
+    tutLogsRes,
     activeProgramRes,
     splitsRes,
     userSkillsRes,
@@ -51,16 +52,28 @@ export async function getCoachInputs(userId: string) {
       .from("workout_sessions")
       .select("*")
       .eq("user_id", userId)
-      .gte("workout_date", last7Date)
+      .gte("workout_date", last30Date)
       .order("workout_date", { ascending: false }),
 
     supabase
       .from("logs")
-      .select("id, exercise_id, weight, reps, sets, created_at, exercises(name, split_id)")
+      .select("id, exercise_id, weight, reps, sets, volume, rpe, type, created_at, exercises(name, split_id)")
       .eq("user_id", userId)
-      .gte("created_at", last30Iso)
+      .gte("created_at", last90Iso)
       .order("created_at", { ascending: false })
-      .limit(40),
+      .limit(150),
+
+    // Advanced Insights (TUT) RPE is otherwise invisible to Coach — it's a
+    // separate table from `logs`, so a near-max-effort TUT set never
+    // affected readiness/recovery warnings without this.
+    supabase
+      .from("exercise_tut_logs")
+      .select("id, exercise_id, load_kg, sets, reps, rpe, performed_on")
+      .eq("user_id", userId)
+      .not("rpe", "is", null)
+      .gte("performed_on", last90Iso.slice(0, 10))
+      .order("performed_on", { ascending: false })
+      .limit(60),
 
     supabase
       .from("programs")
@@ -105,6 +118,7 @@ export async function getCoachInputs(userId: string) {
     measurements: measurementsRes.data ?? null,
     sessions: sessionsRes.data ?? [],
     logs: logsRes.data ?? [],
+    tutLogs: tutLogsRes.data ?? [],
     activeProgram: activeProgramRes.data ?? null,
     splits: splitsRes.data ?? [],
     userSkills: userSkillsRes.data ?? [],

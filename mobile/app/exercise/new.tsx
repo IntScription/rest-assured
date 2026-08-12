@@ -1310,7 +1310,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   backgroundGlow: {
     position: "absolute",

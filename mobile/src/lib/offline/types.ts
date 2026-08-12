@@ -53,7 +53,25 @@ export type CachedLog = {
   volume?: number | null;
   day?: string | null;
   type?: string | null;
+  rpe?: number | null;
   created_at?: string | null;
+  log_date?: string | null;
+  pending_sync?: boolean;
+  deleted_local?: boolean;
+};
+
+export type CachedTutLog = {
+  id: string;
+  user_id: string;
+  exercise_id: string;
+  tut_seconds: number;
+  load_kg?: number | null;
+  sets: number;
+  reps: number;
+  rpe?: number | null;
+  rest_seconds?: number | null;
+  note?: string | null;
+  performed_on: string;
   pending_sync?: boolean;
   deleted_local?: boolean;
 };
@@ -220,6 +238,14 @@ export type PendingAction =
     retries: number;
     status: "pending" | "failed" | "syncing";
     payload: CachedWorkoutSession;
+  }
+  | {
+    id: string;
+    type: "tutLog.create";
+    createdAt: string;
+    retries: number;
+    status: "pending" | "failed" | "syncing";
+    payload: CachedTutLog;
   };
 
 export type SyncMeta = {

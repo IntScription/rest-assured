@@ -14,8 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useFocusEffect } from "@react-navigation/native";
+import { useRouter, useFocusEffect } from "expo-router";
 
 import { supabase } from "@/src/lib/supabase";
 import {
@@ -35,7 +34,14 @@ import {
   SectionShell,
 } from "@/src/features/train/components/SectionShell";
 import TrainProgramCard from "@/src/features/train/components/TrainProgramCard";
+import { MissedWorkoutPrompt } from "@/src/features/train/components/MissedWorkoutPrompt";
+import { TodaysMissionCard } from "@/src/features/train/components/TodaysMissionCard";
+import { TrainingHeatmap } from "@/src/features/train/components/TrainingHeatmap";
+import { UpcomingWeekStrip } from "@/src/features/train/components/UpcomingWeekStrip";
+import { WorkoutDateCard } from "@/src/features/train/components/WorkoutDateCard";
 import { useTrainData } from "@/src/features/train/hooks/useTrainData";
+import { useTrainingCalendar } from "@/src/features/train/hooks/useTrainingCalendar";
+import { getTodayDateString } from "@/src/features/train/lib/calendarDates";
 import { ShareProgramModal } from "@/src/features/train/components/modals/ShareProgramModal";
 import { ManageProgramModal } from "@/src/features/train/components/modals/ManageProgramModal";
 import { SharedActivityModal } from "@/src/features/train/components/modals/SharedActivityModal";
@@ -60,6 +66,7 @@ function isDarkHex(color?: string) {
         .map((ch) => ch + ch)
         .join("")
       : raw;
+
   const value = Number.parseInt(hex.slice(0, 6), 16);
 
   if (Number.isNaN(value)) return false;
@@ -119,6 +126,46 @@ export default function TrainScreen() {
     busy,
   } = useTrainData(userId);
 
+  const {
+    selectedDate,
+    setSelectedDate,
+    selectedPlannedSplit,
+    completedDates,
+    loggedDates,
+    skippedDates,
+    missedDates,
+    selectedDateIsMissed,
+    markSelectedDateSkipped,
+    shiftCycleToSelectedSplit,
+    fetchCalendarDates,
+  } = useTrainingCalendar({
+    userId,
+    activeProgram,
+    splits: manageSplits,
+  });
+
+  const [dismissedMissedDates, setDismissedMissedDates] = useState<Set<string>>(new Set());
+
+  const dismissMissedPrompt = useCallback((date: string) => {
+    setDismissedMissedDates((prev) => new Set(prev).add(date));
+  }, []);
+
+  const handleKeepSchedule = useCallback(() => {
+    dismissMissedPrompt(selectedDate);
+  }, [dismissMissedPrompt, selectedDate]);
+
+  const handleShiftCycle = useCallback(async () => {
+    const date = selectedDate;
+    await shiftCycleToSelectedSplit();
+    dismissMissedPrompt(date);
+  }, [dismissMissedPrompt, selectedDate, shiftCycleToSelectedSplit]);
+
+  const handleMarkSkipped = useCallback(async () => {
+    const date = selectedDate;
+    await markSelectedDateSkipped();
+    dismissMissedPrompt(date);
+  }, [dismissMissedPrompt, markSelectedDateSkipped, selectedDate]);
+
   const [programsExpanded, setProgramsExpanded] = useState(true);
   const [programFilter, setProgramFilter] = useState<
     "all" | "own" | "imported"
@@ -136,7 +183,7 @@ export default function TrainScreen() {
   const appBusy = busy || actionBusy;
   const isDark = useMemo(
     () => isDarkHex(t.background) || isDarkHex(t.card),
-    [t.background, t.card],
+    [t.background, t.card]
   );
   const statusBarStyle = isDark ? "light-content" : "dark-content";
   const screenPalette = useMemo(() => getTrainScreenPalette(isDark), [isDark]);
@@ -165,7 +212,7 @@ export default function TrainScreen() {
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-        ]),
+        ])
       ),
       Animated.loop(
         Animated.sequence([
@@ -181,7 +228,7 @@ export default function TrainScreen() {
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-        ]),
+        ])
       ),
       Animated.loop(
         Animated.sequence([
@@ -197,7 +244,7 @@ export default function TrainScreen() {
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-        ]),
+        ])
       ),
     ];
 
@@ -277,12 +324,22 @@ export default function TrainScreen() {
     ],
   };
 
+  const handleRefreshWithCalendar = useCallback(async () => {
+    await Promise.all([handleRefresh(), fetchCalendarDates()]);
+  }, [fetchCalendarDates, handleRefresh]);
+
+  useEffect(() => {
+    if (!activeProgram?.id) return;
+
+    void fetchSplitsForProgram(activeProgram.id);
+  }, [activeProgram?.id, fetchSplitsForProgram]);
+
   const canSharePrograms = !!profile?.username;
 
   const stats = useMemo(() => {
     const totalSplits = Object.values(splitCountsByProgram).reduce(
       (sum, count) => sum + count,
-      0,
+      0
     );
     const importedPrograms = Object.keys(programImports ?? {}).length;
 
@@ -378,7 +435,7 @@ export default function TrainScreen() {
       return () => {
         mounted = false;
       };
-    }, []),
+    }, [])
   );
 
   useEffect(() => {
@@ -425,14 +482,14 @@ export default function TrainScreen() {
           [
             { text: "Cancel", style: "cancel" },
             { text: "Go to Profile", onPress: () => router.push("/profile") },
-          ],
+          ]
         );
         return;
       }
 
       setShareProgram(program);
     },
-    [profile?.username, router],
+    [profile?.username, router]
   );
 
   const openManageProgram = useCallback(
@@ -446,7 +503,7 @@ export default function TrainScreen() {
         setManageLoading(false);
       }
     },
-    [fetchSplitsForProgram],
+    [fetchSplitsForProgram]
   );
 
   const closeManageProgram = useCallback(() => {
@@ -494,9 +551,12 @@ export default function TrainScreen() {
                 name,
                 is_active:
                   shouldActivateCreatedProgramForTour || programs.length === 0,
+                schedule_anchor_date: getTodayDateString(),
               },
             ])
-            .select("id, name, is_active, user_id, created_at")
+            .select(
+              "id, name, is_active, user_id, created_at, schedule_anchor_date"
+            )
             .single();
 
           if (error) throw error;
@@ -518,7 +578,7 @@ export default function TrainScreen() {
           const nextOrderIndex =
             manageSplits.reduce(
               (max, split) => Math.max(max, split.order_index ?? 0),
-              -1,
+              -1
             ) + 1;
 
           const { data, error } = await supabase
@@ -555,17 +615,21 @@ export default function TrainScreen() {
 
           if (type === "program") {
             setManageProgram((prev) =>
-              prev?.id === targetId ? { ...prev, name } : prev,
+              prev?.id === targetId ? { ...prev, name } : prev
             );
           }
         }
 
         setCreateModal((prev) => ({ ...prev, visible: false }));
 
-        await handleRefresh();
+        await handleRefreshWithCalendar();
 
         if (type === "split" && manageProgram?.id) {
           await fetchSplitsForProgram(manageProgram.id);
+        }
+
+        if (activeProgram?.id) {
+          await fetchSplitsForProgram(activeProgram.id);
         }
 
         if (
@@ -594,7 +658,7 @@ export default function TrainScreen() {
       } catch (error: any) {
         Alert.alert(
           "Could not save",
-          String(error?.message ?? "Unknown error"),
+          String(error?.message ?? "Unknown error")
         );
       } finally {
         setActionBusy(false);
@@ -602,9 +666,10 @@ export default function TrainScreen() {
     },
     [
       actionBusy,
+      activeProgram?.id,
       createModal,
       fetchSplitsForProgram,
-      handleRefresh,
+      handleRefreshWithCalendar,
       manageProgram?.id,
       manageSplits,
       programs.length,
@@ -612,7 +677,7 @@ export default function TrainScreen() {
       tourActive,
       tourStep,
       userId,
-    ],
+    ]
   );
 
   const openCreateSplitForTour = useCallback(async () => {
@@ -686,6 +751,7 @@ export default function TrainScreen() {
             trainGlowTopMotion,
           ]}
         />
+
         <Animated.View
           style={[
             styles.backgroundGlow,
@@ -694,6 +760,7 @@ export default function TrainScreen() {
             trainGlowMidMotion,
           ]}
         />
+
         <Animated.View
           style={[
             styles.backgroundGlow,
@@ -706,7 +773,10 @@ export default function TrainScreen() {
 
       <ScrollView
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefreshWithCalendar}
+          />
         }
         contentContainerStyle={[
           styles.scrollContent,
@@ -773,6 +843,7 @@ export default function TrainScreen() {
                 <Text style={[styles.compactGlowLabel, { color: t.mutedText }]}>
                   Active program
                 </Text>
+
                 <Text
                   style={[styles.compactGlowValue, { color: t.text }]}
                   numberOfLines={1}
@@ -806,6 +877,7 @@ export default function TrainScreen() {
                 <Text style={[styles.compactGlowLabel, { color: t.mutedText }]}>
                   Sharing
                 </Text>
+
                 <Text
                   style={[styles.compactGlowValue, { color: t.text }]}
                   numberOfLines={1}
@@ -839,6 +911,61 @@ export default function TrainScreen() {
               </TouchableOpacity>
             </View>
 
+            <View style={styles.calendarCardWrap}>
+              <TodaysMissionCard
+                t={t}
+                selectedDate={selectedDate}
+                activeProgram={activeProgram}
+                plannedSplit={selectedPlannedSplit}
+                completedDates={completedDates}
+                loggedDates={loggedDates}
+              />
+
+              <WorkoutDateCard
+                t={t}
+                selectedDate={selectedDate}
+                activeProgram={activeProgram}
+                splits={manageSplits}
+                completedDates={completedDates}
+                loggedDates={loggedDates}
+                plannedSplit={selectedPlannedSplit}
+                onDateChange={setSelectedDate}
+              />
+
+              {selectedDateIsMissed && !dismissedMissedDates.has(selectedDate) ? (
+                <MissedWorkoutPrompt
+                  t={t}
+                  selectedDate={selectedDate}
+                  plannedSplit={selectedPlannedSplit}
+                  completedDates={completedDates}
+                  loggedDates={loggedDates}
+                  onKeepSchedule={handleKeepSchedule}
+                  onShiftCycle={handleShiftCycle}
+                  onMarkSkipped={handleMarkSkipped}
+                />
+              ) : null}
+
+              <UpcomingWeekStrip
+                t={t}
+                selectedDate={selectedDate}
+                activeProgram={activeProgram}
+                splits={manageSplits}
+                completedDates={completedDates}
+                loggedDates={loggedDates}
+                skippedDates={skippedDates}
+                onSelectDate={setSelectedDate}
+              />
+
+              <TrainingHeatmap
+                t={t}
+                completedDates={completedDates}
+                loggedDates={loggedDates}
+                missedDates={missedDates}
+                skippedDates={skippedDates}
+                onSelectDate={setSelectedDate}
+              />
+            </View>
+
             <View style={styles.statChipRow}>
               <View
                 style={[
@@ -849,6 +976,7 @@ export default function TrainScreen() {
                 <Text style={[styles.statChipValue, { color: t.text }]}>
                   {stats.totalPrograms}
                 </Text>
+
                 <Text style={[styles.statChipLabel, { color: t.mutedText }]}>
                   Programs
                 </Text>
@@ -863,6 +991,7 @@ export default function TrainScreen() {
                 <Text style={[styles.statChipValue, { color: t.text }]}>
                   {stats.totalSplits}
                 </Text>
+
                 <Text style={[styles.statChipLabel, { color: t.mutedText }]}>
                   Splits
                 </Text>
@@ -877,6 +1006,7 @@ export default function TrainScreen() {
                 <Text style={[styles.statChipValue, { color: t.text }]}>
                   {stats.importedPrograms}
                 </Text>
+
                 <Text style={[styles.statChipLabel, { color: t.mutedText }]}>
                   Imported
                 </Text>
@@ -891,6 +1021,7 @@ export default function TrainScreen() {
                 <Text style={[styles.statChipValue, { color: t.text }]}>
                   {stats.pendingShares}
                 </Text>
+
                 <Text style={[styles.statChipLabel, { color: t.mutedText }]}>
                   Pending
                 </Text>
@@ -908,6 +1039,7 @@ export default function TrainScreen() {
                   size={18}
                   color="white"
                 />
+
                 <Text style={styles.profileCtaText}>
                   Set Username in Profile
                 </Text>
@@ -966,10 +1098,10 @@ export default function TrainScreen() {
                             ? programs.length
                             : item === "imported"
                               ? programs.filter(
-                                (program) => !!programImports?.[program.id],
+                                (program) => !!programImports?.[program.id]
                               ).length
                               : programs.filter(
-                                (program) => !programImports?.[program.id],
+                                (program) => !programImports?.[program.id]
                               ).length;
 
                         return (
@@ -1035,6 +1167,7 @@ export default function TrainScreen() {
                           size={22}
                           color={t.mutedText}
                         />
+
                         <Text
                           style={[styles.filteredEmptyTitle, { color: t.text }]}
                         >
@@ -1042,6 +1175,7 @@ export default function TrainScreen() {
                             ? "No imported programs"
                             : "No own programs"}
                         </Text>
+
                         <Text
                           style={[
                             styles.filteredEmptyText,
@@ -1092,6 +1226,7 @@ export default function TrainScreen() {
                     ]}
                   >
                     <Ionicons name="add" size={18} color="white" />
+
                     <Text style={styles.createBtnText}>Create Program</Text>
                   </TouchableOpacity>
                 ) : null}
@@ -1110,7 +1245,7 @@ export default function TrainScreen() {
         onClose={() => setShareProgram(null)}
         onSuccess={() => {
           setSharedVisible(true);
-          void handleRefresh();
+          void handleRefreshWithCalendar();
         }}
       />
 
@@ -1174,7 +1309,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   backgroundGlow: {
     position: "absolute",
@@ -1239,6 +1374,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "900",
     marginTop: 2,
+  },
+  calendarCardWrap: {
+    marginTop: 14,
   },
   statChipRow: {
     width: "100%",
@@ -1316,7 +1454,6 @@ const styles = StyleSheet.create({
     width: "100%",
     gap: 10,
   },
-
   programFilterRow: {
     width: "100%",
     flexDirection: "row",
@@ -1386,4 +1523,3 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 });
-

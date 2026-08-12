@@ -1,8 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -42,6 +41,7 @@ import type {
   UserSkillStatus,
 } from "@/src/features/skills/types";
 import { updateSkillStatus } from "@/src/features/skills/utils/update-skill-status";
+import { setSkillRoutePreview } from "@/src/features/skills/utils/skillRouteCache";
 import {
   getSkillStatusSync,
   publishSkillStatusSync,
@@ -499,6 +499,7 @@ export default function ProgressSection() {
   };
 
   const openSkillDetail = (card: SkillDashboardCard) => {
+    setSkillRoutePreview(card);
     router.push({
       pathname: "/skills/[skillId]",
       params: {
@@ -2324,10 +2325,10 @@ const styles = StyleSheet.create({
     paddingVertical: 28,
   },
   quickActionBlurWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   quickActionBackdropTint: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(8,12,18,0.24)",
   },
   quickActionModalContent: {

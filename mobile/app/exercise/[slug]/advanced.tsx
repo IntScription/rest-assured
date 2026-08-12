@@ -13,8 +13,10 @@ import {
   Platform,
   LayoutAnimation,
   UIManager,
+  type LayoutChangeEvent,
   type TextInputProps,
 } from "react-native";
+import Svg, { Circle, Polygon, Polyline } from "react-native-svg";
 import {
   memo,
   useCallback,
@@ -29,6 +31,11 @@ import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "@/src/lib/supabase";
 import { useAppTheme } from "@/src/theme/theme";
+import { cacheGetJson, cacheKey, cacheSetJson } from "@/src/lib/offline-cache";
+import { useIsOnline } from "@/hooks/use-is-online";
+import { enqueueAction, removePendingAction } from "@/src/lib/offline/queue";
+import { flushPendingActions } from "@/src/lib/offline/sync";
+import type { CachedTutLog } from "@/src/lib/offline/types";
 import {
   getOnboardingStep,
   isOnboardingActive,
@@ -47,6 +54,7 @@ type TutEntry = {
   rest_seconds: number | null;
   note: string | null;
   performed_on: string;
+  pending?: boolean;
 };
 
 type ExerciseRecord = {
@@ -80,6 +88,10 @@ const TREND_COLORS = {
   highest: "#22C55E",
   normal: "#94A3B8",
 };
+
+// Matches QuickLoggerCard's RPE_OPTIONS — same discrete 1-10 scale, same
+// chip interaction, instead of a free-text field with no bounds checking.
+const RPE_OPTIONS = [6, 7, 8, 9, 10];
 
 const TOUR_HIGHLIGHT_GREEN = "#22C55E";
 
@@ -142,6 +154,33 @@ function formatDateLabel(value: string) {
     month: "short",
     year: "numeric",
   });
+}
+
+type TutTrendPoint = {
+  id: string;
+  value: number;
+  dateLabel: string;
+};
+
+/**
+ * Chronological (oldest→newest) points for plotting, built from the most
+ * recent `maxPoints` entries. `entries` is expected newest-first, the order
+ * this screen already fetches them in.
+ */
+function getTutTrendSeries(entries: TutEntry[], maxPoints = 10): TutTrendPoint[] {
+  return entries
+    .slice(0, maxPoints)
+    .reverse()
+    .map((entry) => {
+      const date = new Date(entry.performed_on);
+      return {
+        id: entry.id,
+        value: entry.tut_seconds,
+        dateLabel: Number.isNaN(date.getTime())
+          ? ""
+          : date.toLocaleDateString(undefined, { day: "numeric", month: "short" }),
+      };
+    });
 }
 
 function normalizeAdvancedTourStep(value?: string) {
@@ -441,6 +480,103 @@ const OverviewCard = memo(function OverviewCard({
   );
 });
 
+const TUT_CHART_HEIGHT = 120;
+const TUT_CHART_PADDING = 12;
+
+type TutTrendGraphCardProps = {
+  t: ReturnType<typeof useAppTheme>;
+  entries: TutEntry[];
+};
+
+const TutTrendGraphCard = memo(function TutTrendGraphCard({ t, entries }: TutTrendGraphCardProps) {
+  const [chartWidth, setChartWidth] = useState(0);
+
+  const series = useMemo(() => getTutTrendSeries(entries, 10), [entries]);
+
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    setChartWidth(event.nativeEvent.layout.width);
+  }, []);
+
+  const { points, minLabel, maxLabel } = useMemo(() => {
+    if (series.length < 2 || chartWidth <= 0) {
+      return { points: [] as { x: number; y: number }[], minLabel: "", maxLabel: "" };
+    }
+
+    const values = series.map((p) => p.value);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const innerWidth = chartWidth - TUT_CHART_PADDING * 2;
+    const innerHeight = TUT_CHART_HEIGHT - TUT_CHART_PADDING * 2;
+
+    const computed = series.map((p, index) => ({
+      x: TUT_CHART_PADDING + (index / (series.length - 1)) * innerWidth,
+      y: TUT_CHART_PADDING + (1 - (p.value - min) / range) * innerHeight,
+    }));
+
+    return {
+      points: computed,
+      minLabel: formatSeconds(min),
+      maxLabel: formatSeconds(max),
+    };
+  }, [series, chartWidth]);
+
+  if (series.length < 2) return null;
+
+  const polylinePoints = points.map((p) => `${p.x},${p.y}`).join(" ");
+  const areaPoints =
+    points.length > 0
+      ? `${TUT_CHART_PADDING},${TUT_CHART_HEIGHT - TUT_CHART_PADDING} ${polylinePoints} ${
+          points[points.length - 1].x
+        },${TUT_CHART_HEIGHT - TUT_CHART_PADDING}`
+      : "";
+
+  return (
+    <View style={[styles.overviewCard, { backgroundColor: t.card, borderColor: t.border }]}>
+      <Text style={[styles.sectionTitle, { color: t.text }]}>Progress</Text>
+      <Text style={[styles.overviewSubtext, { color: t.mutedText }]}>
+        Time under tension over your last {series.length} sessions
+      </Text>
+
+      <View style={styles.tutGraphAxisRow}>
+        <Text style={[styles.tutGraphAxisLabel, { color: t.mutedText }]}>{maxLabel}</Text>
+      </View>
+
+      <View onLayout={handleLayout} style={{ height: TUT_CHART_HEIGHT, marginTop: 6 }}>
+        {points.length > 0 ? (
+          <Svg width="100%" height={TUT_CHART_HEIGHT}>
+            <Polygon points={areaPoints} fill={TREND_COLORS.latest} fillOpacity={0.12} stroke="none" />
+            <Polyline points={polylinePoints} fill="none" stroke={TREND_COLORS.latest} strokeWidth={2.5} />
+            {points.map((p, index) => {
+              const isLast = index === points.length - 1;
+              return (
+                <Circle
+                  key={series[index].id}
+                  cx={p.x}
+                  cy={p.y}
+                  r={isLast ? 5 : 3}
+                  fill={isLast ? TREND_COLORS.highest : t.card}
+                  stroke={TREND_COLORS.latest}
+                  strokeWidth={isLast ? 0 : 2}
+                />
+              );
+            })}
+          </Svg>
+        ) : null}
+      </View>
+
+      <View style={styles.tutGraphAxisRow}>
+        <Text style={[styles.tutGraphAxisLabel, { color: t.mutedText }]}>{minLabel}</Text>
+      </View>
+
+      <View style={styles.tutGraphDateRow}>
+        <Text style={[styles.trendLabel, { color: t.mutedText }]}>{series[0]?.dateLabel}</Text>
+        <Text style={[styles.trendLabel, { color: t.mutedText }]}>{series[series.length - 1]?.dateLabel}</Text>
+      </View>
+    </View>
+  );
+});
+
 type EntryCardProps = {
   item: TutEntry;
   t: ReturnType<typeof useAppTheme>;
@@ -496,8 +632,20 @@ const EntryCard = memo(function EntryCard({
             {formatDateLabel(item.performed_on)}
           </Text>
 
-          {isBest || isLatest ? (
+          {isBest || isLatest || item.pending ? (
             <View style={styles.entryBadgeRow}>
+              {item.pending ? (
+                <View
+                  style={[
+                    styles.entryBadge,
+                    { backgroundColor: t.cardAlt, borderColor: t.border },
+                  ]}
+                >
+                  <Ionicons name="cloud-upload-outline" size={12} color={t.mutedText} />
+                  <Text style={[styles.entryBadgeText, { color: t.mutedText }]}>Pending</Text>
+                </View>
+              ) : null}
+
               {isBest ? (
                 <View
                   style={[
@@ -526,15 +674,21 @@ const EntryCard = memo(function EntryCard({
         </View>
 
         <View style={styles.entryActions}>
-          <Pressable
-            onPress={handleEditPress}
-            style={[styles.iconButton, { backgroundColor: t.cardAlt }]}
-          >
-            <Ionicons name="create-outline" size={16} color={t.text} />
-          </Pressable>
+          {item.pending ? null : (
+            <Pressable
+              onPress={handleEditPress}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${formatSeconds(item.tut_seconds)} entry from ${formatDateLabel(item.performed_on)}`}
+              style={[styles.iconButton, { backgroundColor: t.cardAlt }]}
+            >
+              <Ionicons name="create-outline" size={16} color={t.text} />
+            </Pressable>
+          )}
 
           <Pressable
             onPress={handleDeletePress}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete ${formatSeconds(item.tut_seconds)} entry from ${formatDateLabel(item.performed_on)}`}
             style={[styles.iconButton, { backgroundColor: t.cardAlt }]}
           >
             <Ionicons name="trash-outline" size={16} color={t.danger} />
@@ -618,6 +772,7 @@ export default function AdvancedScreen() {
   const [saving, setSaving] = useState(false);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const isOnline = useIsOnline();
 
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -625,6 +780,7 @@ export default function AdvancedScreen() {
 
   const listRef = useRef<FlatList<TutEntry>>(null);
   const noteScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasDataRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -743,6 +899,14 @@ export default function AdvancedScreen() {
       setLoading(true);
       setScreenError(null);
 
+      // Flush any queued offline writes before reading — otherwise this
+      // fetch can race a pending tutLog.create and show a stale list with
+      // the entry still marked "Pending" after it's actually synced.
+      if (isOnline) {
+        await flushPendingActions();
+        if (!mounted) return;
+      }
+
       const [
         {
           data: { user },
@@ -788,6 +952,20 @@ export default function AdvancedScreen() {
       const foundExercise = exerciseData as ExerciseRecord;
       setExercise(foundExercise);
 
+      const tutCacheId = cacheKey(["advanced-tut", user.id, foundExercise.id]);
+
+      // Paint instantly from the last-known entries (if any) before waiting
+      // on the network — this screen previously had no caching at all, so
+      // it always showed a full-screen spinner on every visit.
+      if (!hasDataRef.current) {
+        const cached = await cacheGetJson<TutEntry[]>(tutCacheId);
+        if (cached && !hasDataRef.current && mounted) {
+          hasDataRef.current = true;
+          setEntries(cached);
+          setLoading(false);
+        }
+      }
+
       const { data: logData, error: logError } = await supabase
         .from("exercise_tut_logs")
         .select(
@@ -801,14 +979,19 @@ export default function AdvancedScreen() {
 
       if (logError) {
         console.error("Failed to fetch TUT logs:", logError);
-        setEntries([]);
-        setScreenError("Could not load TUT entries.");
+        if (!hasDataRef.current) {
+          setEntries([]);
+          setScreenError("Could not load TUT entries.");
+        }
         setLoading(false);
         return;
       }
 
-      setEntries((logData as TutEntry[]) || []);
+      const nextEntries = (logData as TutEntry[]) || [];
+      hasDataRef.current = true;
+      setEntries(nextEntries);
       setLoading(false);
+      void cacheSetJson(tutCacheId, nextEntries);
     } catch (error) {
       if (!mounted) return;
       console.error("fetchExerciseAndEntries error:", error);
@@ -820,7 +1003,7 @@ export default function AdvancedScreen() {
     return () => {
       mounted = false;
     };
-  }, [slug]);
+  }, [slug, isOnline]);
 
   useEffect(() => {
     void fetchExerciseAndEntries();
@@ -985,18 +1168,26 @@ export default function AdvancedScreen() {
       return;
     }
 
-    if (rpe !== null && !Number.isFinite(rpe)) {
-      Alert.alert("Invalid RPE", "Please enter a valid RPE.");
-      return;
-    }
+    // No Number.isFinite check needed for RPE — it can only ever be "" or
+    // one of RPE_OPTIONS now that it's chip-driven, not free text.
 
     if (restSeconds !== null && !Number.isFinite(restSeconds)) {
       Alert.alert("Invalid rest", "Please enter valid rest seconds.");
       return;
     }
 
+    if (editingId && !isOnline) {
+      Alert.alert(
+        "You're offline",
+        "Editing an existing entry needs a connection. Try again once you're back online."
+      );
+      return;
+    }
+
     setSaving(true);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const performedOn = new Date().toISOString();
 
     const payload = {
       user_id: userId,
@@ -1008,7 +1199,7 @@ export default function AdvancedScreen() {
       rpe,
       rest_seconds: restSeconds,
       note: form.note.trim() ? form.note.trim() : null,
-      performed_on: new Date().toISOString(),
+      performed_on: performedOn,
     };
 
     try {
@@ -1020,12 +1211,59 @@ export default function AdvancedScreen() {
           .eq("user_id", userId);
 
         if (error) throw error;
+
+        await fetchExerciseAndEntries();
+      } else if (!isOnline) {
+        // Same pattern as the main logging flow: queue the create and show
+        // it optimistically, rather than failing outright with no connection.
+        const localTempId = `pending-${Date.now()}`;
+
+        const pendingEntry: TutEntry = {
+          id: localTempId,
+          user_id: userId,
+          exercise_id: exercise.id,
+          tut_seconds: tutSeconds,
+          load_kg: loadKg,
+          sets,
+          reps,
+          rpe,
+          rest_seconds: restSeconds,
+          note: payload.note,
+          performed_on: performedOn,
+          pending: true,
+        };
+
+        const queuedPayload: CachedTutLog = {
+          id: localTempId,
+          user_id: userId,
+          exercise_id: exercise.id,
+          tut_seconds: tutSeconds,
+          load_kg: loadKg,
+          sets,
+          reps,
+          rpe,
+          rest_seconds: restSeconds,
+          note: payload.note,
+          performed_on: performedOn,
+        };
+
+        await enqueueAction({
+          id: localTempId,
+          type: "tutLog.create",
+          createdAt: performedOn,
+          retries: 0,
+          status: "pending",
+          payload: queuedPayload,
+        });
+
+        setEntries((prev) => [pendingEntry, ...prev]);
       } else {
         const { error } = await supabase.from("exercise_tut_logs").insert(payload);
         if (error) throw error;
+
+        await fetchExerciseAndEntries();
       }
 
-      await fetchExerciseAndEntries();
       resetForm();
 
       if (tourActive && tourStep === "advanced-log") {
@@ -1049,6 +1287,7 @@ export default function AdvancedScreen() {
     form.rpe,
     form.sets,
     form.tut,
+    isOnline,
     resetForm,
     tourActive,
     tourStep,
@@ -1085,6 +1324,13 @@ export default function AdvancedScreen() {
               await Haptics.notificationAsync(
                 Haptics.NotificationFeedbackType.Warning
               );
+
+              if (entryId.startsWith("pending-")) {
+                await removePendingAction(entryId);
+                setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
+                if (editingId === entryId) resetForm();
+                return;
+              }
 
               const { error } = await supabase
                 .from("exercise_tut_logs")
@@ -1232,6 +1478,8 @@ export default function AdvancedScreen() {
           latestEntryId={latestEntryId}
         />
 
+        <TutTrendGraphCard t={t} entries={entries} />
+
         <View
           style={[
             styles.sectionCard,
@@ -1256,7 +1504,11 @@ export default function AdvancedScreen() {
             </View>
 
             {editingId ? (
-              <Pressable onPress={resetForm}>
+              <Pressable
+                onPress={resetForm}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel editing this entry"
+              >
                 <Text style={[styles.clearText, { color: t.primaryBg }]}>
                   Cancel edit
                 </Text>
@@ -1269,6 +1521,8 @@ export default function AdvancedScreen() {
               <Pressable
                 key={seconds}
                 onPress={() => applyTutPreset(seconds)}
+                accessibilityRole="button"
+                accessibilityLabel={`Set TUT to ${seconds} seconds`}
                 style={({ pressed }) => [
                   styles.presetChip,
                   {
@@ -1337,17 +1591,40 @@ export default function AdvancedScreen() {
             </View>
           </View>
 
-          <View style={styles.rowInputs}>
-            <View style={styles.inputCol}>
-              <Input
-                t={t}
-                placeholder="RPE"
-                value={form.rpe}
-                onChangeText={(v) => updateFormField("rpe", v)}
-                keyboardType={Platform.OS === "ios" ? "decimal-pad" : "numeric"}
-              />
-            </View>
+          <Text style={[styles.rpeLabel, { color: t.mutedText }]}>RPE (optional)</Text>
+          <View style={styles.presetRow}>
+            {RPE_OPTIONS.map((option) => {
+              const active = form.rpe === String(option);
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => updateFormField("rpe", active ? "" : String(option))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`RPE ${option}`}
+                  accessibilityState={{ selected: active }}
+                  style={({ pressed }) => [
+                    styles.presetChip,
+                    {
+                      backgroundColor: active ? t.primaryBg : t.cardAlt,
+                      borderColor: active ? t.primaryBg : t.border,
+                      opacity: pressed ? 0.82 : 1,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.presetChipText,
+                      { color: active ? primaryButtonTextColor : t.text },
+                    ]}
+                  >
+                    {option}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
+          <View style={styles.rowInputs}>
             <View style={styles.inputCol}>
               <Input
                 t={t}
@@ -1392,6 +1669,9 @@ export default function AdvancedScreen() {
           <Pressable
             onPress={handleSave}
             disabled={saving || finishingTour}
+            accessibilityRole="button"
+            accessibilityLabel={editingId ? "Update entry" : "Save entry"}
+            accessibilityState={{ disabled: saving || finishingTour }}
             style={[
               styles.saveButton,
               {
@@ -1447,6 +1727,8 @@ export default function AdvancedScreen() {
                 <Pressable
                   key={seconds}
                   onPress={() => startWithPreset(seconds)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Start with ${seconds} seconds`}
                   style={({ pressed }) => [
                     styles.emptyPresetButton,
                     {
@@ -1498,7 +1780,7 @@ export default function AdvancedScreen() {
       saving,
       finishingTour,
       primaryButtonTextColor,
-      entries.length,
+      entries,
     ]
   );
 
@@ -1534,6 +1816,8 @@ export default function AdvancedScreen() {
         <Text style={[styles.errorTitle, { color: t.text }]}>{screenError}</Text>
         <Pressable
           onPress={handleGoBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
           style={[styles.backButton, { backgroundColor: t.primaryBg }]}
         >
           <Text style={[styles.backButtonText, { color: primaryButtonTextColor }]}>
@@ -1594,6 +1878,8 @@ export default function AdvancedScreen() {
       <View style={styles.screenHeader}>
         <Pressable
           onPress={handleGoBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
           style={[styles.backIcon, styles.fixedBackIcon, { backgroundColor: t.card, borderColor: t.border }]}
         >
           <Ionicons name="chevron-back" size={20} color={t.text} />
@@ -1659,7 +1945,7 @@ export default function AdvancedScreen() {
 
 const styles = StyleSheet.create({
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     overflow: "hidden",
   },
   backgroundBubbleLarge: {
@@ -1981,6 +2267,18 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
   },
+  tutGraphAxisRow: {
+    alignItems: "flex-end",
+  },
+  tutGraphAxisLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  tutGraphDateRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
   emptyTrend: {
     alignItems: "center",
     justifyContent: "center",
@@ -2016,6 +2314,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 4,
     fontWeight: "600",
+  },
+  rpeLabel: {
+    marginBottom: 6,
+    fontSize: 12,
+    fontWeight: "800",
   },
   presetRow: {
     flexDirection: "row",

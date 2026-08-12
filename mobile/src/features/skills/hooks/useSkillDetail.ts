@@ -6,6 +6,8 @@ import type {
   UserSkill,
 } from "@/src/features/skills/types";
 import { supabase } from "@/src/lib/supabase";
+import { getSkillBestLog } from "@/src/features/skills/utils/skill-pr";
+import { getSkillRoutePreview } from "@/src/features/skills/utils/skillRouteCache";
 
 export type SkillMilestoneRow = {
   id: string;
@@ -36,15 +38,31 @@ type UseSkillDetailState = {
 };
 
 export function useSkillDetail(skillId?: string) {
-  const [state, setState] = useState<UseSkillDetailState>({
-    loading: true,
-    userId: null,
-    skill: null,
-    userSkill: null,
-    stages: [],
-    logs: [],
-    milestones: [],
-    resources: [],
+  const [state, setState] = useState<UseSkillDetailState>(() => {
+    const preview = getSkillRoutePreview(skillId);
+    if (!preview) {
+      return {
+        loading: true,
+        userId: null,
+        skill: null,
+        userSkill: null,
+        stages: [],
+        logs: [],
+        milestones: [],
+        resources: [],
+      };
+    }
+
+    return {
+      loading: false,
+      userId: null,
+      skill: preview.card.skill,
+      userSkill: preview.card.userSkill,
+      stages: preview.card.currentStage ? [preview.card.currentStage] : [],
+      logs: preview.card.latestLog ? [preview.card.latestLog] : [],
+      milestones: [],
+      resources: [],
+    };
   });
 
   const load = useCallback(async () => {
@@ -53,7 +71,10 @@ export function useSkillDetail(skillId?: string) {
       return;
     }
 
-    setState((prev) => ({ ...prev, loading: true }));
+    // Only block on a full-screen loading state when there's nothing to
+    // show yet — a seeded preview or an already-loaded skill (e.g. a
+    // refresh() after logging) should refetch silently in the background.
+    setState((prev) => ({ ...prev, loading: prev.skill ? false : true }));
 
     const {
       data: { user },
@@ -134,9 +155,9 @@ export function useSkillDetail(skillId?: string) {
   }, [state.stages, currentStage]);
 
   const bestLog = useMemo(() => {
-    if (state.logs.length === 0) return null;
-    return [...state.logs].sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))[0];
-  }, [state.logs]);
+    if (!state.skill) return null;
+    return getSkillBestLog(state.logs, state.skill.metric_type);
+  }, [state.logs, state.skill]);
 
   const latestLog = state.logs[0] ?? null;
 

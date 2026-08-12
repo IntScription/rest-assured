@@ -16,6 +16,7 @@ export type CoachInsightInput = {
   restSecondsLeft: number;
   recentWorkingLogCount: number;
   daysSinceLastWorkingLog: number | null;
+  lastRpe: number | null;
 };
 
 export type CoachNextSetInsight = {
@@ -42,6 +43,7 @@ export function getCoachNextSetInsight(input: CoachInsightInput): CoachNextSetIn
     restSecondsLeft,
     recentWorkingLogCount,
     daysSinceLastWorkingLog,
+    lastRpe,
   } = input;
 
   const disclaimer =
@@ -79,6 +81,15 @@ export function getCoachNextSetInsight(input: CoachInsightInput): CoachNextSetIn
       tone: "caution",
       title: "Ease back in",
       body: `It has been ${daysSinceLastWorkingLog} days since your last working log here. Consider matching last time before pushing harder.`,
+      disclaimer,
+    };
+  }
+
+  if (lastRpe !== null && lastRpe >= 9) {
+    return {
+      tone: "caution",
+      title: "Last set was near max",
+      body: `You logged RPE ${lastRpe} last time. Repeat this load or drop back slightly before chasing more weight.`,
       disclaimer,
     };
   }

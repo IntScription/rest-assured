@@ -24,7 +24,7 @@ export type AppTheme = {
 export const DARK_THEME: AppTheme = {
   background: "#0a0a0a",
   card: "#151515",
-  cardAlt: "#141414",
+  cardAlt: "#1e1e1e",
   text: "#ffffff",
   mutedText: "#888888",
   border: "#222222",
@@ -34,7 +34,7 @@ export const DARK_THEME: AppTheme = {
   secondaryText: "#ffffff",
   link: "#1e90ff",
   danger: "#ff4d4d",
-  success: "#16a34a",
+  success: "#10b981",
   tabBarBg: "#000000",
   tabBarBorder: "#111111",
   inputBg: "#0f0f0f",

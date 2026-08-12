@@ -20,7 +20,7 @@ export type TutPreviewRow = {
 
 export type LogTag = "working" | "warmup" | "topset";
 export type LogFilter = "all" | "working" | "warmup" | "topset";
-export type TrendMetric = "volume" | "weight" | "reps";
+export type TrendMetric = "volume" | "weight" | "reps" | "rpe";
 export type TrendView = "graph" | "list";
 
 export type LogRow = {
@@ -32,8 +32,10 @@ export type LogRow = {
   sets: number;
   volume: number | null;
   created_at: string | null;
+  log_date?: string | null;
   day?: string | null;
   type?: string | null;
+  rpe?: number | null;
   pending?: boolean;
   local_temp_id?: string;
 };
@@ -42,17 +44,6 @@ export type ExerciseCacheShape = {
   exercise: ExerciseRow | null;
   logs: LogRow[];
   splitName?: string | null;
-};
-
-export type PendingLogPayload = {
-  local_temp_id: string;
-  weight: number;
-  reps: number;
-  sets: number;
-  volume: number;
-  day: string | null;
-  type: LogTag;
-  created_at: string;
 };
 
 export type ExercisePrefs = {

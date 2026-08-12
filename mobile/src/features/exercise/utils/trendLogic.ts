@@ -1,3 +1,4 @@
+import { format } from "date-fns";
 import type { CompareInsight, CompareInsightTone, LogRow, LogTag, TrendMetric } from "../types";
 import { formatCompactWeight, getLogTag } from "./formatters";
 
@@ -7,16 +8,49 @@ export function getComparableLogs(logs: LogRow[], currentTag: LogTag, reps: numb
   return closeRepLogs.length > 0 ? closeRepLogs : sameTagLogs;
 }
 
-export function getTrendMetricValue(log: LogRow, metric: TrendMetric) {
+export function getTrendMetricValue(log: LogRow, metric: TrendMetric): number | null {
   if (metric === "weight") return Number(log.weight ?? 0);
   if (metric === "reps") return Number(log.reps ?? 0);
+  if (metric === "rpe") return log.rpe ?? null;
   return Number(log.volume ?? 0);
 }
 
 export function formatTrendMetricValue(metric: TrendMetric, value: number) {
   if (metric === "weight") return formatCompactWeight(value);
   if (metric === "reps") return `${value} reps`;
+  if (metric === "rpe") return `RPE ${value}`;
   return `${value}`;
+}
+
+export type TrendSeriesPoint = {
+  id: string;
+  value: number;
+  dateLabel: string;
+};
+
+/**
+ * Chronological (oldest→newest) points for plotting, built from the most
+ * recent `maxPoints` working logs. `logs` is expected newest-first, the
+ * order the rest of the exercise screen already uses. Logs with no
+ * comparable value for this metric (e.g. RPE wasn't logged for that set)
+ * are skipped rather than plotted as 0.
+ */
+export function getTrendSeries(logs: LogRow[], metric: TrendMetric, maxPoints = 10): TrendSeriesPoint[] {
+  return logs
+    .slice(0, maxPoints)
+    .reverse()
+    .flatMap((log) => {
+      const value = getTrendMetricValue(log, metric);
+      if (value === null) return [];
+      const date = log.created_at ? new Date(log.created_at) : null;
+      return [
+        {
+          id: log.id,
+          value,
+          dateLabel: date && !Number.isNaN(date.getTime()) ? format(date, "MMM d") : "",
+        },
+      ];
+    });
 }
 
 export function getProgressInsight(

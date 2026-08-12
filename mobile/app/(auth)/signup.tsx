@@ -91,6 +91,13 @@ export default function SignupScreen() {
 
   const enterAnim = useRef(new RNAnimated.Value(0)).current;
   const floatAnim = useRef(new RNAnimated.Value(0)).current;
+  const emailInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => emailInputRef.current?.focus(), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     RNAnimated.timing(enterAnim, {
@@ -138,6 +145,8 @@ export default function SignupScreen() {
   };
 
   const handleSignup = async () => {
+    if (loading) return;
+
     const trimmedEmail = email.trim();
 
     if (!trimmedEmail || !password) {
@@ -337,12 +346,16 @@ export default function SignupScreen() {
         ]}
       >
         <TextInput
+          ref={emailInputRef}
           placeholder="Email"
           autoCapitalize="none"
           keyboardType="email-address"
           placeholderTextColor={t.mutedText}
           value={email}
           onChangeText={setEmail}
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => passwordInputRef.current?.focus()}
           style={[
             styles.input,
             {
@@ -354,11 +367,14 @@ export default function SignupScreen() {
         />
 
         <TextInput
+          ref={passwordInputRef}
           placeholder="Password"
           secureTextEntry
           placeholderTextColor={t.mutedText}
           value={password}
           onChangeText={setPassword}
+          returnKeyType="go"
+          onSubmitEditing={handleSignup}
           style={[
             styles.input,
             {
@@ -454,6 +470,26 @@ export default function SignupScreen() {
             Already have an account? Login
           </Text>
         </TouchableOpacity>
+
+        <Text style={[styles.legalText, { color: t.mutedText }]}>
+          By creating an account, you agree to our{" "}
+          <Text
+            accessibilityRole="link"
+            style={[styles.legalLink, { color: t.link }]}
+            onPress={() => router.push("/terms")}
+          >
+            Terms of Service
+          </Text>{" "}
+          and{" "}
+          <Text
+            accessibilityRole="link"
+            style={[styles.legalLink, { color: t.link }]}
+            onPress={() => router.push("/privacy")}
+          >
+            Privacy Policy
+          </Text>
+          .
+        </Text>
       </View>
     </AuthAnimatedBackground>
   );
@@ -574,6 +610,16 @@ const styles = StyleSheet.create({
   footerLink: {
     fontWeight: "800",
     fontSize: 13.5,
+  },
+  legalText: {
+    marginTop: 14,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: "center",
+    paddingHorizontal: 8,
+  },
+  legalLink: {
+    fontWeight: "700",
   },
 });
 

@@ -17,8 +17,7 @@ import {
   type ListRenderItem,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useFocusEffect } from "@react-navigation/native";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { format } from "date-fns";
 import * as Haptics from "expo-haptics";
 import type { User } from "@supabase/supabase-js";
@@ -168,7 +167,14 @@ function useProgram(user: User | null) {
 
       setActiveProgram((prev) => {
         const prevNormalized = normalizeProgram(prev);
-        if (sameProgram(prevNormalized, nextProgram)) return prevNormalized;
+        // Return the *original* reference when nothing actually changed —
+        // normalizeProgram always allocates a new object, so returning
+        // prevNormalized here would change activeProgram's identity on
+        // every call (e.g. the focus-effect refetch below, which fires on
+        // every Home tab focus), cascading into every effect/useMemo keyed
+        // on the full activeProgram object throughout this screen and
+        // spuriously re-running them whenever Home regains focus.
+        if (sameProgram(prevNormalized, nextProgram)) return prev;
         return nextProgram;
       });
 
@@ -442,9 +448,10 @@ function useExercisesAndLatestLogs(
 
       const { data, error } = await supabase
         .from("logs")
-        .select("id, exercise_id, weight, reps, sets, created_at, type, day")
+        .select("id, exercise_id, weight, reps, sets, created_at, log_date, type, day")
         .eq("user_id", user.id)
         .in("exercise_id", exerciseIds)
+        .order("log_date", { ascending: false })
         .order("created_at", { ascending: false })
         .order("id", { ascending: false });
 
@@ -1467,7 +1474,7 @@ export default function HomeScreen() {
       }
     },
     [
-      splits.length,
+      splits,
       loopedSplits.length,
       cycleDone,
       resetCycle,
@@ -1613,7 +1620,7 @@ export default function HomeScreen() {
         style={[styles.container, { backgroundColor: pageBackground }]}
         edges={["top"]}
       >
-        <View pointerEvents="none" style={StyleSheet.absoluteFillObject} />
+        <View pointerEvents="none" style={StyleSheet.absoluteFill} />
       </SafeAreaView>
     );
   }
@@ -1641,7 +1648,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: pageBackground }]} edges={["top"]}>
-      <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         <RNAnimated.View
           style={[
             backgroundStyles.bubbleLarge,
@@ -1696,7 +1703,7 @@ export default function HomeScreen() {
             key={`split-bg-${index}`}
             pointerEvents="none"
             style={[
-              StyleSheet.absoluteFillObject,
+              StyleSheet.absoluteFill,
               {
                 backgroundColor: bgColor,
                 opacity,
@@ -1817,3 +1824,4 @@ const backgroundStyles = StyleSheet.create({
     borderRadius: 80,
   },
 });
+

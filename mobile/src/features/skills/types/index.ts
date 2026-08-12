@@ -84,6 +84,7 @@ export type SkillDashboardCard = {
   bestLog: SkillLog | null;
   progressPercent: number;
   highlightText: string;
+  isNewBest: boolean;
 };
 
 export type SkillsDashboardSummary = {

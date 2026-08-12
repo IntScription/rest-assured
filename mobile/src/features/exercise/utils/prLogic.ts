@@ -18,14 +18,11 @@ export function getLogAchievement(
 
   const heaviest = Math.max(0, ...sameCategoryLogs.map((log) => Number(log.weight ?? 0)));
   const bestVolume = Math.max(0, ...sameCategoryLogs.map((log) => Number(log.volume ?? 0)));
-  const bestBodyweightReps = Math.max(
-    0,
-    ...sameCategoryLogs.filter((log) => Number(log.weight ?? 0) <= 0).map((log) => Number(log.reps ?? 0))
-  );
+  const bestReps = Math.max(0, ...sameCategoryLogs.map((log) => Number(log.reps ?? 0)));
 
   if (weight > heaviest) return "New heaviest PR";
   if (volume > bestVolume) return "New volume PR";
-  if (weight <= 0 && reps > bestBodyweightReps) return "New bodyweight rep PR";
+  if (reps > bestReps) return weight <= 0 ? "New bodyweight rep PR" : "New rep PR";
   if (previousLogs.length === 0) return "First log saved";
   if (tag === "topset") return "Top set logged";
   return "Log saved";
@@ -35,7 +32,7 @@ export function getPrFlags(logs: LogRow[]) {
   const flags: Record<string, PrFlags> = {};
   let heaviest = 0;
   let bestVolume = 0;
-  let bestBodyweightReps = 0;
+  let bestReps = 0;
 
   [...logs].reverse().forEach((log) => {
     const weight = Number(log.weight ?? 0);
@@ -56,9 +53,9 @@ export function getPrFlags(logs: LogRow[]) {
       current.volume = true;
       bestVolume = volume;
     }
-    if (weight <= 0 && reps > bestBodyweightReps) {
+    if (reps > bestReps) {
       current.reps = true;
-      bestBodyweightReps = reps;
+      bestReps = reps;
     }
 
     flags[log.id] = current;
@@ -73,7 +70,7 @@ export function getCurrentPrOwners(logs: LogRow[]): CurrentPrOwners {
   let repsId: string | null = null;
   let heaviest = -1;
   let bestVolume = -1;
-  let bestBodyweightReps = -1;
+  let bestReps = -1;
 
   for (const log of logs) {
     const weight = Number(log.weight ?? 0);
@@ -88,8 +85,8 @@ export function getCurrentPrOwners(logs: LogRow[]): CurrentPrOwners {
       bestVolume = volume;
       volumeId = log.id;
     }
-    if (weight <= 0 && reps > bestBodyweightReps) {
-      bestBodyweightReps = reps;
+    if (reps > bestReps) {
+      bestReps = reps;
       repsId = log.id;
     }
   }
@@ -108,7 +105,7 @@ export function getTodayLogIds(logs: LogRow[]) {
 export function getPrBoardItems(
   logs: LogRow[],
   currentPrOwners: CurrentPrOwners,
-  dashboardMetrics: { bestVolumeLog: LogRow | null; bodyweightRepPR: number },
+  dashboardMetrics: { bestVolumeLog: LogRow | null; bestReps: number },
   lastLog: LogRow | null
 ): RecordShortcut[] {
   const bestVolumeLabel = dashboardMetrics.bestVolumeLog
@@ -140,9 +137,9 @@ export function getPrBoardItems(
       accent: PR_COLORS.volume,
     },
     {
-      key: "bw",
-      label: "BW Rep PR",
-      value: dashboardMetrics.bodyweightRepPR > 0 ? `${dashboardMetrics.bodyweightRepPR} reps` : "—",
+      key: "reps",
+      label: "Rep PR",
+      value: dashboardMetrics.bestReps > 0 ? `${dashboardMetrics.bestReps} reps` : "—",
       logId: currentPrOwners.repsId,
       accent: PR_COLORS.reps,
     },

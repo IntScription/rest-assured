@@ -1,4 +1,4 @@
-import React from "react";
+import { memo, useEffect, useRef } from "react";
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -13,7 +13,10 @@ type QuickLoggerValue = {
   reps: string;
   sets: string;
   note: string;
+  rpe: string;
 };
+
+const RPE_OPTIONS = [6, 7, 8, 9, 10];
 
 type Props = {
   t: ThemeLike;
@@ -36,9 +39,12 @@ type Props = {
   statusMsg: string;
   onSave: () => void;
   onCancelEdit: () => void;
+  saving: boolean;
+  autoFocusWeight?: boolean;
+  onFocusWeight?: () => void;
 };
 
-export default function QuickLoggerCard({
+function QuickLoggerCard({
   t,
   editingId,
   logTag,
@@ -59,7 +65,27 @@ export default function QuickLoggerCard({
   statusMsg,
   onSave,
   onCancelEdit,
+  saving,
+  autoFocusWeight,
+  onFocusWeight,
 }: Props) {
+  const weightInputRef = useRef<TextInput>(null);
+  const repsInputRef = useRef<TextInput>(null);
+  const setsInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (!autoFocusWeight) return;
+
+    const timer = setTimeout(() => {
+      onFocusWeight?.();
+      weightInputRef.current?.focus();
+    }, 350);
+
+    return () => clearTimeout(timer);
+    // Only ever auto-focus once, right after this card first mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const accent = editingId ? t.link : t.success ?? "#10B981";
   const inputBg = t.inputBg ?? t.cardAlt;
   const inputBorder = t.inputBorder ?? t.border;
@@ -141,11 +167,17 @@ export default function QuickLoggerCard({
         <View style={styles.inputBlock}>
           <Text style={[styles.inputLabel, { color: t.mutedText }]}>Weight</Text>
           <TextInput
+            ref={weightInputRef}
             placeholder="0"
             placeholderTextColor={t.mutedText}
             keyboardType="decimal-pad"
             value={value.weight}
             onChangeText={(text) => onChange("weight", text)}
+            onFocus={onFocusWeight}
+            editable={!saving}
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => repsInputRef.current?.focus()}
             style={[styles.input, { backgroundColor: inputBg, borderColor: inputBorder, color: t.text }]}
           />
         </View>
@@ -153,11 +185,16 @@ export default function QuickLoggerCard({
         <View style={styles.inputBlock}>
           <Text style={[styles.inputLabel, { color: t.mutedText }]}>Reps</Text>
           <TextInput
+            ref={repsInputRef}
             placeholder="8"
             placeholderTextColor={t.mutedText}
             keyboardType="number-pad"
             value={value.reps}
             onChangeText={(text) => onChange("reps", text)}
+            editable={!saving}
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => setsInputRef.current?.focus()}
             style={[styles.input, { backgroundColor: inputBg, borderColor: inputBorder, color: t.text }]}
           />
         </View>
@@ -165,13 +202,44 @@ export default function QuickLoggerCard({
         <View style={styles.inputBlock}>
           <Text style={[styles.inputLabel, { color: t.mutedText }]}>Sets</Text>
           <TextInput
+            ref={setsInputRef}
             placeholder="1"
             placeholderTextColor={t.mutedText}
             keyboardType="number-pad"
             value={value.sets}
             onChangeText={(text) => onChange("sets", text)}
+            editable={!saving}
+            returnKeyType="done"
+            submitBehavior="submit"
+            onSubmitEditing={onSave}
             style={[styles.input, { backgroundColor: inputBg, borderColor: inputBorder, color: t.text }]}
           />
+        </View>
+      </View>
+
+      <View style={styles.noteBlock}>
+        <Text style={[styles.inputLabel, { color: t.mutedText }]}>RPE (optional)</Text>
+        <View style={styles.chipRow}>
+          {RPE_OPTIONS.map((option) => {
+            const active = value.rpe === String(option);
+            return (
+              <TouchableOpacity
+                key={option}
+                disabled={saving}
+                onPress={() => onChange("rpe", active ? "" : String(option))}
+                activeOpacity={0.85}
+                style={[
+                  styles.optionChip,
+                  { backgroundColor: inputBg, borderColor: inputBorder },
+                  active && { backgroundColor: primaryBg, borderColor: primaryBg },
+                ]}
+              >
+                <Text style={[styles.optionChipText, { color: active ? primaryText : t.text }]}>
+                  {option}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
@@ -182,6 +250,8 @@ export default function QuickLoggerCard({
           placeholderTextColor={t.mutedText}
           value={value.note}
           onChangeText={(text) => onChange("note", text)}
+          editable={!saving}
+          returnKeyType="done"
           style={[styles.noteInput, { backgroundColor: inputBg, borderColor: inputBorder, color: t.text }]}
         />
       </View>
@@ -258,11 +328,14 @@ export default function QuickLoggerCard({
 
         <TouchableOpacity
           onPress={onSave}
+          disabled={saving}
           activeOpacity={0.9}
-          style={[styles.saveButton, { backgroundColor: accent }]}
+          style={[styles.saveButton, { backgroundColor: accent, opacity: saving ? 0.6 : 1 }]}
         >
           <Ionicons name={editingId ? "checkmark-outline" : "add-circle-outline"} size={18} color="#fff" />
-          <Text style={styles.saveButtonText}>{editingId ? "Update Log" : "Add Log"}</Text>
+          <Text style={styles.saveButtonText}>
+            {saving ? "Saving…" : editingId ? "Update Log" : "Add Log"}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -271,6 +344,8 @@ export default function QuickLoggerCard({
     </View>
   );
 }
+
+export default memo(QuickLoggerCard);
 
 const styles = StyleSheet.create({
   card: {

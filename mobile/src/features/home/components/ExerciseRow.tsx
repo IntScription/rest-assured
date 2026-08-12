@@ -15,8 +15,10 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import { supabase } from "@/src/lib/supabase";
+import { setTrainingDate, useTrainingDate } from "@/src/store/training-date";
 
 import { ExerciseInsightSheet } from "./ExerciseInsightSheet";
+import { ExerciseCalendarSheet } from "./ExerciseCalendarSheet";
 import { publishLatestLog } from "../store/home-log-events";
 import { setExerciseRoutePreview } from "../utils/exerciseRouteCache";
 import { formatLatestLog } from "../utils/formatLatestLog";
@@ -47,6 +49,7 @@ type LogLite = {
   reps: number;
   sets: number;
   created_at: string | null;
+  log_date?: string | null;
   type: string | null;
   day: string | null;
   volume?: number | null;
@@ -77,7 +80,9 @@ type Props = {
 
 const MENU_MS = 2600;
 const EMPTY_METRIC = "- - -";
-const LOG_SELECT = "id, exercise_id, weight, reps, sets, created_at, type, day";
+const LOG_SELECT =
+  "id, exercise_id, weight, reps, sets, created_at, log_date, type, day";
+
 const latestRpeCache = new Map<string, number | null>();
 
 const METRIC_COLORS = {
@@ -97,6 +102,19 @@ const METRIC_COLORS = {
   },
 };
 
+function getTodayDateString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = `${now.getMonth() + 1}`.padStart(2, "0");
+  const day = `${now.getDate()}`.padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function isFutureTrainingDate(dateString: string) {
+  return dateString.localeCompare(getTodayDateString()) > 0;
+}
+
 function isDarkTheme(t: any) {
   const value = String(t?.background ?? "").replace("#", "");
   if (value.length !== 6) return !!t?.dark;
@@ -114,11 +132,6 @@ function metricColor(t: any, tone: keyof typeof METRIC_COLORS.light) {
   return palette[tone];
 }
 
-/**
- * One shared metric animation is cheaper than 2 loops per row.
- * It keeps VOLUME/RPE label-value swapping synchronized and avoids
- * extra animation work when many ExerciseRows are mounted.
- */
 const SHARED_METRIC_SWAP = new A.Value(0);
 let sharedMetricLoop: A.CompositeAnimation | null = null;
 let sharedMetricUsers = 0;
@@ -148,7 +161,7 @@ function retainSharedMetricLoop() {
           useNativeDriver: true,
         }),
         A.delay(320),
-      ]),
+      ])
     );
 
     sharedMetricLoop.start();
@@ -183,13 +196,18 @@ function calcVolume(log?: Partial<LogLite> | null) {
 function formatCompactNumber(value: number) {
   if (!Number.isFinite(value) || value <= 0) return EMPTY_METRIC;
   if (value >= 1000000) return `${(value / 1000000).toFixed(1)}m`;
-  if (value >= 1000)
+  if (value >= 1000) {
     return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
+  }
+
   return `${Math.round(value)}`;
 }
 
 function formatRpe(value: number | null) {
-  if (value == null || !Number.isFinite(value) || value <= 0) return EMPTY_METRIC;
+  if (value == null || !Number.isFinite(value) || value <= 0) {
+    return EMPTY_METRIC;
+  }
+
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
@@ -202,6 +220,7 @@ function formatLast(value: string | null | undefined) {
 
   const diffMs = Date.now() - time;
   const minutes = Math.max(0, Math.floor(diffMs / 60000));
+
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
 
@@ -220,15 +239,17 @@ function formatLast(value: string | null | undefined) {
 function toneColor(t: any, tone?: ExerciseProgressInfo["tone"]) {
   if (tone === "up") return t.success ?? "#22C55E";
   if (tone === "down") return t.danger ?? "#EF4444";
-  if (tone === "same" || tone === "new" || tone === "pending")
+  if (tone === "same" || tone === "new" || tone === "pending") {
     return t.link ?? "#3B82F6";
+  }
+
   return t.primaryBg ?? t.link ?? "#3B82F6";
 }
 
 function volumeToneColor(
   t: any,
   latestVolume: number,
-  previousVolume: number,
+  previousVolume: number
 ) {
   if (!Number.isFinite(latestVolume) || latestVolume <= 0) {
     return metricColor(t, "empty");
@@ -249,17 +270,18 @@ function rpeToneColor(t: any, rpe: number | null) {
     return metricColor(t, "empty");
   }
 
-  // For RPE, lower/manageable is good, very high is bad/fatigue.
   if (rpe >= 8.5) return metricColor(t, "bad");
   if (rpe >= 7.5) return metricColor(t, "warning");
+
   return metricColor(t, "good");
 }
 
 function mergeLog(history: LogLite[], log: LogLite) {
   const withoutDuplicate = history.filter((item) => item.id !== log.id);
+
   return [log, ...withoutDuplicate]
     .sort((a, b) =>
-      String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")),
+      String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""))
     )
     .slice(0, 20);
 }
@@ -278,6 +300,7 @@ function normalizeLog(log?: LatestLogLite | LogLite | null): LogLite | null {
     reps: Number(log.reps ?? 0),
     sets: Number(log.sets ?? 0),
     created_at: log.created_at ?? null,
+    log_date: (log as { log_date?: string | null }).log_date ?? null,
     type: log.type ?? null,
     day: log.day ?? null,
     volume,
@@ -286,7 +309,7 @@ function normalizeLog(log?: LatestLogLite | LogLite | null): LogLite | null {
 
 function sameLog(
   a?: LatestLogLite | LogLite | null,
-  b?: LatestLogLite | LogLite | null,
+  b?: LatestLogLite | LogLite | null
 ) {
   return (
     a?.id === b?.id &&
@@ -295,6 +318,8 @@ function sameLog(
     a?.reps === b?.reps &&
     a?.sets === b?.sets &&
     a?.created_at === b?.created_at &&
+    (a as { log_date?: string | null } | null | undefined)?.log_date ===
+    (b as { log_date?: string | null } | null | undefined)?.log_date &&
     a?.type === b?.type &&
     a?.day === b?.day
   );
@@ -304,7 +329,7 @@ function useMetrics(
   history: LogLite[],
   latestLog: LogLite | LatestLogLite | null,
   latestAdvancedRpe: number | null,
-  t: any,
+  t: any
 ): { last: string; volume: MetricInfo; rpe: MetricInfo } {
   return useMemo(() => {
     const latest = (latestLog as LogLite | null) ?? history[0] ?? null;
@@ -451,14 +476,17 @@ export const ExerciseRow = memo(
     setExercisesBySplit,
   }: Props) {
     const isEditing = editingId === item.id;
+    const { selectedDate } = useTrainingDate();
+
     const [localHistory, setLocalHistory] = useState<LogLite[]>([]);
     const [latestAdvancedRpe, setLatestAdvancedRpe] = useState<number | null>(
-      () => latestRpeCache.get(item.id) ?? null,
+      () => latestRpeCache.get(item.id) ?? null
     );
     const [repeatBusy, setRepeatBusy] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [sheetVisible, setSheetVisible] = useState(false);
     const [sheetMode, setSheetMode] = useState<"volume" | "rpe">("volume");
+    const [calendarVisible, setCalendarVisible] = useState(false);
 
     const scale = useRef(new A.Value(1)).current;
     const flash = useRef(new A.Value(0)).current;
@@ -466,7 +494,7 @@ export const ExerciseRow = memo(
 
     const normalizedLatestLog = useMemo(
       () => normalizeLog(latestLog),
-      [latestLog],
+      [latestLog]
     );
 
     const normalizedLogHistory = useMemo(
@@ -474,26 +502,29 @@ export const ExerciseRow = memo(
         logHistory
           .map((log) => normalizeLog(log))
           .filter((log): log is LogLite => !!log),
-      [logHistory],
+      [logHistory]
     );
 
     const history = normalizedLogHistory.length
       ? normalizedLogHistory
       : localHistory;
+
     const metrics = useMetrics(
       history,
       normalizedLatestLog,
       latestAdvancedRpe,
-      t,
+      t
     );
+
     const repeatSuggestion = useMemo(
       () =>
         getSmartRepeatSuggestion(
           normalizedLatestLog as LatestLogLite | null,
-          history as LatestLogLite[],
+          history as LatestLogLite[]
         ),
-      [normalizedLatestLog, history],
+      [normalizedLatestLog, history]
     );
+
     const accent = toneColor(t, progressInfo?.tone);
 
     useEffect(() => {
@@ -514,7 +545,7 @@ export const ExerciseRow = memo(
             setLocalHistory(
               (data as LogLite[])
                 .map((log) => normalizeLog(log))
-                .filter((log): log is LogLite => !!log),
+                .filter((log): log is LogLite => !!log)
             );
           }
         });
@@ -590,7 +621,7 @@ export const ExerciseRow = memo(
           stiffness: 260,
           mass: 0.7,
         }).start(),
-      [scale],
+      [scale]
     );
 
     const flashCard = useCallback(() => {
@@ -626,8 +657,24 @@ export const ExerciseRow = memo(
       setSheetVisible(true);
     }, []);
 
+    const openCalendarSheet = useCallback(() => {
+      closeMenu();
+      setCalendarVisible(true);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }, [closeMenu]);
+
     const openExercise = useCallback(() => {
       if (!item.slug || isEditing) return;
+
+      if (isFutureTrainingDate(selectedDate)) {
+        Alert.alert(
+          "Future date blocked",
+          "You can only log workouts for today or past dates."
+        );
+        return;
+      }
+
+      setTrainingDate(selectedDate);
 
       setExerciseRoutePreview({
         exercise: item,
@@ -640,10 +687,58 @@ export const ExerciseRow = memo(
         params: {
           exerciseId: item.id,
           exerciseName: item.name,
+          selectedDate,
+          logDate: selectedDate,
           latestLogId: normalizedLatestLog?.id ?? "",
+          quickLog: "true",
         },
       });
-    }, [item, normalizedLatestLog, progressInfo, router, isEditing]);
+    }, [
+      item,
+      isEditing,
+      normalizedLatestLog,
+      progressInfo,
+      router,
+      selectedDate,
+    ]);
+
+    const openLogForCalendarDate = useCallback(
+      (dateString: string) => {
+        if (!item.slug || isEditing) return;
+
+        if (isFutureTrainingDate(dateString)) {
+          Alert.alert(
+            "Future date blocked",
+            "You can only log workouts for today or past dates."
+          );
+          return;
+        }
+
+        setTrainingDate(dateString);
+
+        setExerciseRoutePreview({
+          exercise: item,
+          latestLog: normalizedLatestLog as LatestLogLite | null,
+          progressInfo,
+        });
+
+        setCalendarVisible(false);
+
+        router.push({
+          pathname: `/exercise/${item.slug}` as any,
+          params: {
+            exerciseId: item.id,
+            exerciseName: item.name,
+            selectedDate: dateString,
+            logDate: dateString,
+            openLog: "true",
+            fromCalendar: "true",
+            latestLogId: normalizedLatestLog?.id ?? "",
+          },
+        });
+      },
+      [item, isEditing, normalizedLatestLog, progressInfo, router]
+    );
 
     const cancelEdit = useCallback(() => {
       setEditingId(null);
@@ -661,8 +756,11 @@ export const ExerciseRow = memo(
       if (!currentSplit?.id || !uid) return;
 
       const name = editValue.trim();
-      if (!name)
+
+      if (!name) {
         return Alert.alert("Name required", "Exercise name cannot be empty.");
+      }
+
       if (name === item.name) return cancelEdit();
 
       const { error } = await supabase
@@ -676,7 +774,7 @@ export const ExerciseRow = memo(
       setExercisesBySplit((prev) => ({
         ...prev,
         [currentSplit.id]: (prev[currentSplit.id] ?? []).map((x) =>
-          x.id === item.id ? { ...x, name } : x,
+          x.id === item.id ? { ...x, name } : x
         ),
       }));
 
@@ -712,7 +810,7 @@ export const ExerciseRow = memo(
             setExercisesBySplit((prev) => ({
               ...prev,
               [currentSplit.id]: (prev[currentSplit.id] ?? []).filter(
-                (x) => x.id !== item.id,
+                (x) => x.id !== item.id
               ),
             }));
 
@@ -730,8 +828,17 @@ export const ExerciseRow = memo(
         !repeatSuggestion ||
         repeatBusy ||
         isEditing
-      )
+      ) {
         return;
+      }
+
+      if (isFutureTrainingDate(selectedDate)) {
+        Alert.alert(
+          "Future date blocked",
+          "You can only log workouts for today or past dates."
+        );
+        return;
+      }
 
       setRepeatBusy(true);
       closeMenu();
@@ -747,13 +854,17 @@ export const ExerciseRow = memo(
 
         const { data, error } = await supabase
           .from("logs")
-          .insert(payload as any)
+          .insert({
+            ...(payload as any),
+            log_date: selectedDate,
+          } as any)
           .select(LOG_SELECT)
           .single();
 
         if (error) return Alert.alert("Repeat log failed", error.message);
 
         const newLog = normalizeLog(data as LogLite | null);
+
         if (newLog) {
           publishLatestLog(newLog as LatestLogLite);
           setLocalHistory((prev) => mergeLog(prev, newLog));
@@ -772,6 +883,8 @@ export const ExerciseRow = memo(
           params: {
             exerciseId: item.id,
             exerciseName: item.name,
+            selectedDate,
+            logDate: selectedDate,
             repeatedLog: "true",
             repeatNote: repeatSuggestion.note,
             latestLogId: newLog?.id ?? normalizedLatestLog.id,
@@ -787,6 +900,7 @@ export const ExerciseRow = memo(
       repeatSuggestion,
       repeatBusy,
       isEditing,
+      selectedDate,
       closeMenu,
       flashCard,
       progressInfo,
@@ -821,7 +935,7 @@ export const ExerciseRow = memo(
           ]}
         />
 
-        {progressInfo?.isPr && (
+        {progressInfo?.isPr ? (
           <View
             pointerEvents="none"
             style={[
@@ -829,7 +943,7 @@ export const ExerciseRow = memo(
               { borderColor: accent, backgroundColor: `${accent}08` },
             ]}
           />
-        )}
+        ) : null}
 
         <View style={styles.row}>
           {isEditing ? (
@@ -888,14 +1002,14 @@ export const ExerciseRow = memo(
                     {item.name}
                   </Text>
 
-                  {progressInfo?.isPr && (
+                  {progressInfo?.isPr ? (
                     <View style={[styles.prBadge, { backgroundColor: accent }]}>
                       <Ionicons name="flame" size={11} color={t.primaryText} />
                       <Text style={[styles.prText, { color: t.primaryText }]}>
                         {progressInfo.prLabel ?? "PR"}
                       </Text>
                     </View>
-                  )}
+                  ) : null}
                 </View>
 
                 <Text
@@ -923,6 +1037,7 @@ export const ExerciseRow = memo(
                     t={t}
                     onPress={() => openSheet("volume")}
                   />
+
                   <MetricPill
                     label="RPE"
                     value={metrics.rpe.text}
@@ -936,7 +1051,7 @@ export const ExerciseRow = memo(
               <View style={styles.actions}>
                 {menuOpen ? (
                   <View style={styles.iconRow}>
-                    {!!normalizedLatestLog && (
+                    {normalizedLatestLog ? (
                       <TouchableOpacity
                         disabled={repeatBusy}
                         onPress={repeatLog}
@@ -956,7 +1071,26 @@ export const ExerciseRow = memo(
                           color={t.text}
                         />
                       </TouchableOpacity>
-                    )}
+                    ) : null}
+
+                    <TouchableOpacity
+                      onPress={openCalendarSheet}
+                      hitSlop={10}
+                      activeOpacity={0.85}
+                      style={[
+                        styles.iconBtn,
+                        {
+                          borderColor: t.link,
+                          backgroundColor: `${t.link}14`,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={15}
+                        color={t.link}
+                      />
+                    </TouchableOpacity>
 
                     <TouchableOpacity
                       onPress={startEdit}
@@ -1003,7 +1137,7 @@ export const ExerciseRow = memo(
           )}
         </View>
 
-        {sheetVisible && (
+        {sheetVisible ? (
           <ExerciseInsightSheet
             visible={sheetVisible}
             onClose={() => setSheetVisible(false)}
@@ -1013,7 +1147,17 @@ export const ExerciseRow = memo(
             slug={item.slug ?? undefined}
             t={t}
           />
-        )}
+        ) : null}
+
+        <ExerciseCalendarSheet
+          visible={calendarVisible}
+          item={item}
+          uid={uid}
+          t={t}
+          accent={accent}
+          onClose={() => setCalendarVisible(false)}
+          onLogForDate={openLogForCalendarDate}
+        />
       </A.View>
     );
   },
@@ -1033,7 +1177,7 @@ export const ExerciseRow = memo(
     prev.t === next.t &&
     prev.progressInfo?.tone === next.progressInfo?.tone &&
     prev.progressInfo?.isPr === next.progressInfo?.isPr &&
-    prev.progressInfo?.prLabel === next.progressInfo?.prLabel,
+    prev.progressInfo?.prLabel === next.progressInfo?.prLabel
 );
 
 const styles = StyleSheet.create({
@@ -1050,17 +1194,40 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 5 },
     elevation: 2,
   },
-  flash: { ...StyleSheet.absoluteFillObject },
+  flash: {
+    ...StyleSheet.absoluteFill,
+  },
   prGlow: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderWidth: 1,
     borderRadius: 20,
   },
-  row: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 56 },
-  content: { flex: 1, justifyContent: "center" },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  title: { flex: 1, fontSize: 16, fontWeight: "800", letterSpacing: 0.2 },
-  subtitle: { marginTop: 3, fontSize: 13, fontWeight: "600" },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minHeight: 56,
+  },
+  content: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  title: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  subtitle: {
+    marginTop: 3,
+    fontSize: 13,
+    fontWeight: "600",
+  },
   lastRow: {
     marginTop: 7,
     height: 22,
@@ -1081,7 +1248,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     includeFontPadding: false,
   },
-  metrics: { marginTop: 9, flexDirection: "row", alignItems: "center", gap: 7 },
+  metrics: {
+    marginTop: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
   pill: {
     width: 88,
     height: 28,
@@ -1093,7 +1265,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   pillFill: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 10,
     borderWidth: 1.2,
   },
@@ -1111,7 +1283,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     includeFontPadding: false,
   },
-  pillTextAbs: { position: "absolute", left: 2, right: 2, textAlign: "center" },
+  pillTextAbs: {
+    position: "absolute",
+    left: 2,
+    right: 2,
+    textAlign: "center",
+  },
   prBadge: {
     borderRadius: 999,
     paddingHorizontal: 6,
@@ -1120,7 +1297,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 3,
   },
-  prText: { fontSize: 9, fontWeight: "900" },
+  prText: {
+    fontSize: 9,
+    fontWeight: "900",
+  },
   actions: {
     minWidth: 32,
     flexDirection: "row",
@@ -1128,7 +1308,11 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     overflow: "hidden",
   },
-  iconRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  iconRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   iconBtn: {
     width: 32,
     height: 32,
@@ -1147,7 +1331,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
   },
-  editWrap: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  editWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   input: {
     flex: 1,
     minHeight: 42,
@@ -1165,4 +1354,3 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
-

@@ -1,5 +1,4 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
-import { Stack, useRouter, useSegments } from "expo-router";
+import { DarkTheme, DefaultTheme, ThemeProvider, Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
@@ -17,11 +16,17 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
 
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { ThemeTransitionOverlay } from "@/src/theme/ThemeTransitionOverlay";
 import { supabase } from "@/src/lib/supabase";
 import {
   registerForPushNotifications,
   addPushNotificationResponseListener,
 } from "@/src/lib/push/registerPush";
+import { useIsOnline } from "@/hooks/use-is-online";
+import { useSyncOnReconnect } from "@/src/hooks/use-sync-on-reconnect";
+import { initMonitoring, Sentry } from "@/src/lib/monitoring";
+
+initMonitoring();
 
 const APP_STORE_URL = "https://apps.apple.com/app/id6760107763";
 const APP_STORE_LOOKUP_URL =
@@ -42,7 +47,7 @@ function compareVersions(a: string, b: string) {
   return 0;
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();
   const segments = useSegments();
@@ -57,6 +62,9 @@ export default function RootLayout() {
   const pushRegisteredForUserRef = useRef<string | null>(null);
   const bannerTranslateY = useRef(new Animated.Value(-140)).current;
   const bannerOpacity = useRef(new Animated.Value(0)).current;
+
+  const isOnline = useIsOnline();
+  useSyncOnReconnect(isOnline);
 
   const currentVersion = useMemo(
     () => Application.nativeApplicationVersion ?? "0.0.0",
@@ -403,8 +411,12 @@ export default function RootLayout() {
               </View>
             </View>
           </Animated.View>
+
+          <ThemeTransitionOverlay />
         </View>
       </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
+
+export default Sentry.wrap(RootLayout);

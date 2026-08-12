@@ -40,7 +40,10 @@ function isAuthSessionSuccess(
 }
 
 async function sha256(input: string) {
-  return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input);
+  return await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    input
+  );
 }
 
 function isDarkHex(color?: string) {
@@ -84,13 +87,24 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  const [showPassword, setShowPassword] = useState(false);
+
   const [loading, setLoading] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
+  const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(
+    null
+  );
 
   const redirectTo = useMemo(() => computeRedirectTo(), []);
 
   const titleAnim = useRef(new RNAnimated.Value(0)).current;
   const titleFloat = useRef(new RNAnimated.Value(0)).current;
+  const emailInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => emailInputRef.current?.focus(), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     RNAnimated.timing(titleAnim, {
@@ -115,6 +129,7 @@ export default function LoginScreen() {
     );
 
     loop.start();
+
     return () => loop.stop();
   }, [titleAnim, titleFloat]);
 
@@ -138,6 +153,8 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
+    if (loading) return;
+
     const trimmedEmail = email.trim();
 
     if (!trimmedEmail || !password) {
@@ -203,7 +220,10 @@ export default function LoginScreen() {
       });
     } catch (err: any) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Google sign in failed", String(err?.message ?? "Please try again."));
+      Alert.alert(
+        "Google sign in failed",
+        String(err?.message ?? "Please try again.")
+      );
     } finally {
       setOauthLoading(null);
     }
@@ -214,7 +234,9 @@ export default function LoginScreen() {
       setOauthLoading("apple");
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-      const rawNonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const rawNonce =
+        Math.random().toString(36).slice(2) + Date.now().toString(36);
+
       const hashedNonce = await sha256(rawNonce);
 
       const credential = await AppleAuthentication.signInAsync({
@@ -245,7 +267,10 @@ export default function LoginScreen() {
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Apple sign in failed", String(err?.message ?? "Please try again."));
+      Alert.alert(
+        "Apple sign in failed",
+        String(err?.message ?? "Please try again.")
+      );
     } finally {
       setOauthLoading(null);
     }
@@ -336,12 +361,18 @@ export default function LoginScreen() {
         ]}
       >
         <TextInput
+          ref={emailInputRef}
           placeholder="Email"
           autoCapitalize="none"
+          autoCorrect={false}
           keyboardType="email-address"
+          textContentType="emailAddress"
           placeholderTextColor={t.mutedText}
           value={email}
           onChangeText={setEmail}
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => passwordInputRef.current?.focus()}
           style={[
             styles.input,
             {
@@ -352,21 +383,43 @@ export default function LoginScreen() {
           ]}
         />
 
-        <TextInput
-          placeholder="Password"
-          secureTextEntry
-          placeholderTextColor={t.mutedText}
-          value={password}
-          onChangeText={setPassword}
-          style={[
-            styles.input,
-            {
-              borderColor: t.inputBorder,
-              backgroundColor: t.inputBg,
-              color: t.text,
-            },
-          ]}
-        />
+        <View style={styles.passwordWrap}>
+          <TextInput
+            ref={passwordInputRef}
+            placeholder="Password"
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            placeholderTextColor={t.mutedText}
+            value={password}
+            onChangeText={setPassword}
+            returnKeyType="go"
+            onSubmitEditing={handleLogin}
+            style={[
+              styles.passwordInput,
+              {
+                borderColor: t.inputBorder,
+                backgroundColor: t.inputBg,
+                color: t.text,
+              },
+            ]}
+          />
+
+          <TouchableOpacity
+            onPress={() => setShowPassword((prev) => !prev)}
+            activeOpacity={0.75}
+            style={styles.passwordToggle}
+            accessibilityRole="button"
+            accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+          >
+            <Ionicons
+              name={showPassword ? "eye-off-outline" : "eye-outline"}
+              size={21}
+              color={t.mutedText}
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           onPress={handleLogin}
@@ -479,11 +532,13 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     alignItems: "center",
   },
+
   brandRow: {
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
+
   brandIcon: {
     width: 52,
     height: 52,
@@ -496,22 +551,26 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 2,
   },
+
   readableText: {
     textAlign: "center",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
+
   title: {
     fontSize: 34,
     fontWeight: "900",
     letterSpacing: -0.8,
     marginBottom: 8,
   },
+
   subtitle: {
     fontSize: 15,
     lineHeight: 22,
     fontWeight: "600",
   },
+
   panel: {
     borderWidth: 1,
     borderRadius: 28,
@@ -521,6 +580,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
     elevation: 4,
   },
+
   input: {
     borderWidth: 1,
     padding: 14,
@@ -529,17 +589,43 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+
+  passwordWrap: {
+    position: "relative",
+    marginBottom: 14,
+  },
+
+  passwordInput: {
+    borderWidth: 1,
+    padding: 14,
+    paddingRight: 48,
+    borderRadius: 16,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+
+  passwordToggle: {
+    position: "absolute",
+    right: 14,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
   primaryButton: {
     paddingVertical: 15,
     borderRadius: 16,
     alignItems: "center",
     marginTop: 2,
   },
+
   primaryButtonText: {
     color: "#fff",
     fontWeight: "800",
     fontSize: 15,
   },
+
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -547,15 +633,18 @@ const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 14,
   },
+
   divider: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
   },
+
   dividerText: {
     fontSize: 12,
     fontWeight: "800",
     letterSpacing: 0.8,
   },
+
   oauthButton: {
     borderWidth: 1,
     paddingVertical: 13,
@@ -566,17 +655,19 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 10,
   },
+
   oauthText: {
     fontWeight: "800",
   },
+
   footerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 8,
   },
+
   footerLink: {
     fontWeight: "800",
     fontSize: 13.5,
   },
 });
-

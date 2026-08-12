@@ -37,7 +37,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const VERSION = "1.1.3";
+const VERSION = "1.1.4";
 const APP_STORE_ID = "6760107763";
 const APP_STORE_REVIEW_URL = `itms-apps://itunes.apple.com/app/id${APP_STORE_ID}?action=write-review`;
 const APP_STORE_WEB_REVIEW_URL = `https://apps.apple.com/app/id${APP_STORE_ID}?action=write-review`;
@@ -2193,7 +2193,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backgroundLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   backgroundGlow: {
     position: "absolute",
@@ -2534,7 +2534,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   previewTint: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0,0,0,0.16)",
   },
   previewContentWrap: {

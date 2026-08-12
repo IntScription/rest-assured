@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +40,18 @@ export default function MeasurementsScreen() {
   const [bodyFatPercent, setBodyFatPercent] = useState("");
   const [note, setNote] = useState("");
 
+  const weightRef = useRef<TextInput>(null);
+  const bodyFatRef = useRef<TextInput>(null);
+  const waistRef = useRef<TextInput>(null);
+  const chestRef = useRef<TextInput>(null);
+  const leftArmRef = useRef<TextInput>(null);
+  const rightArmRef = useRef<TextInput>(null);
+  const shouldersRef = useRef<TextInput>(null);
+  const hipsRef = useRef<TextInput>(null);
+  const leftThighRef = useRef<TextInput>(null);
+  const rightThighRef = useRef<TextInput>(null);
+  const noteRef = useRef<TextInput>(null);
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -52,6 +64,12 @@ export default function MeasurementsScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!userId) return;
+    const timer = setTimeout(() => weightRef.current?.focus(), 350);
+    return () => clearTimeout(timer);
+  }, [userId]);
+
   const bodyCompPreview = useMemo(() => {
     if (weightKg && waistCm) {
       return "Good baseline for body composition and waist trend tracking.";
@@ -63,7 +81,7 @@ export default function MeasurementsScreen() {
   }, [weightKg, waistCm]);
 
   const handleSave = async () => {
-    if (!userId) return;
+    if (!userId || loading) return;
 
     try {
       setLoading(true);
@@ -114,6 +132,8 @@ export default function MeasurementsScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
       >
         <CoachBackHeader
           title="Measurements"
@@ -167,6 +187,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="e.g. 72.4"
+            inputRef={weightRef}
+            returnKeyType="next"
+            onSubmitEditing={() => bodyFatRef.current?.focus()}
           />
           <LabeledInput
             label="Body fat %"
@@ -175,6 +198,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={bodyFatRef}
+            returnKeyType="next"
+            onSubmitEditing={() => waistRef.current?.focus()}
           />
           <LabeledInput
             label="Waist (cm)"
@@ -183,6 +209,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Important for physique tracking"
+            inputRef={waistRef}
+            returnKeyType="next"
+            onSubmitEditing={() => chestRef.current?.focus()}
           />
         </SectionCard>
 
@@ -194,6 +223,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={chestRef}
+            returnKeyType="next"
+            onSubmitEditing={() => leftArmRef.current?.focus()}
           />
           <LabeledInput
             label="Left arm (cm)"
@@ -202,6 +234,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={leftArmRef}
+            returnKeyType="next"
+            onSubmitEditing={() => rightArmRef.current?.focus()}
           />
           <LabeledInput
             label="Right arm (cm)"
@@ -210,6 +245,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={rightArmRef}
+            returnKeyType="next"
+            onSubmitEditing={() => shouldersRef.current?.focus()}
           />
           <LabeledInput
             label="Shoulders (cm)"
@@ -218,6 +256,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={shouldersRef}
+            returnKeyType="next"
+            onSubmitEditing={() => hipsRef.current?.focus()}
           />
         </SectionCard>
 
@@ -229,6 +270,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={hipsRef}
+            returnKeyType="next"
+            onSubmitEditing={() => leftThighRef.current?.focus()}
           />
           <LabeledInput
             label="Left thigh (cm)"
@@ -237,6 +281,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={leftThighRef}
+            returnKeyType="next"
+            onSubmitEditing={() => rightThighRef.current?.focus()}
           />
           <LabeledInput
             label="Right thigh (cm)"
@@ -245,6 +292,9 @@ export default function MeasurementsScreen() {
             t={t}
             keyboardType="decimal-pad"
             placeholder="Optional"
+            inputRef={rightThighRef}
+            returnKeyType="next"
+            onSubmitEditing={() => noteRef.current?.focus()}
           />
         </SectionCard>
 
@@ -256,6 +306,7 @@ export default function MeasurementsScreen() {
             t={t}
             multiline
             placeholder="Morning weight, fasted, post-workout, pump, bloating, etc."
+            inputRef={noteRef}
           />
         </SectionCard>
 
@@ -325,6 +376,9 @@ function LabeledInput({
   keyboardType,
   multiline,
   placeholder,
+  inputRef,
+  returnKeyType,
+  onSubmitEditing,
 }: {
   label: string;
   value: string;
@@ -333,17 +387,24 @@ function LabeledInput({
   keyboardType?: "default" | "number-pad" | "decimal-pad";
   multiline?: boolean;
   placeholder?: string;
+  inputRef?: React.RefObject<TextInput | null>;
+  returnKeyType?: "next" | "done";
+  onSubmitEditing?: () => void;
 }) {
   return (
     <View style={styles.inputWrap}>
       <Text style={[styles.label, { color: t.text }]}>{label}</Text>
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChangeText}
         keyboardType={keyboardType ?? "default"}
         multiline={multiline}
         placeholder={placeholder}
         placeholderTextColor={t.mutedText}
+        returnKeyType={multiline ? undefined : (returnKeyType ?? "done")}
+        submitBehavior={multiline ? undefined : "submit"}
+        onSubmitEditing={multiline ? undefined : onSubmitEditing}
         style={[
           styles.input,
           {

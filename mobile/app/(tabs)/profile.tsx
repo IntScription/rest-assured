@@ -9,6 +9,7 @@ import {
   stopOnboarding,
 } from "@/src/lib/onboarding";
 import { supabase } from "@/src/lib/supabase";
+import { exportLogsAsCsv } from "@/src/features/profile/utils/exportLogs";
 import { useAppTheme } from "@/src/theme/theme";
 import { useCustomTabBarBottomPadding } from "@/components/navigation/CustomTabBar";
 import { Ionicons } from "@expo/vector-icons";
@@ -324,6 +325,7 @@ export default function ProfileScreen() {
   const [password, setPassword] = useState("");
   const [loadingDelete, setLoadingDelete] = useState(false);
   const [openingExternal, setOpeningExternal] = useState<string | null>(null);
+  const [exportingData, setExportingData] = useState(false);
 
   const [notificationStatus, setNotificationStatus] =
     useState<NotificationStatus>("checking");
@@ -531,9 +533,18 @@ export default function ProfileScreen() {
     return () => clearTimeout(timer);
   }, [usernameInput, showProfileModal, checkUsernameAvailability]);
 
+  // Google/Apple sign-in accounts have no password identity, so they can
+  // never satisfy a password re-auth check — only require one when the
+  // account actually has an "email" (password-based) identity.
+  const hasPasswordIdentity = useMemo(
+    () => user?.identities?.some((identity) => identity.provider === "email") ?? false,
+    [user]
+  );
+
   const canDelete = useMemo(() => {
-    return confirmText === "DELETE" && password.trim().length > 0 && !loadingDelete;
-  }, [confirmText, password, loadingDelete]);
+    if (loadingDelete || confirmText !== "DELETE") return false;
+    return hasPasswordIdentity ? password.trim().length > 0 : true;
+  }, [confirmText, password, loadingDelete, hasPasswordIdentity]);
 
   const avatarInitials = getInitials(profile?.username ?? null, user);
   const usernameDisplay = profile?.username ? `@${profile.username}` : "No username yet";
@@ -1142,6 +1153,26 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleExportData = async () => {
+    if (exportingData || !user) return;
+
+    try {
+      setExportingData(true);
+      await safeHaptic(() =>
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+      );
+
+      await exportLogsAsCsv(user.id);
+    } catch (err: any) {
+      await safeHaptic(() =>
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+      );
+      Alert.alert("Export failed", err?.message || "Something went wrong.");
+    } finally {
+      setExportingData(false);
+    }
+  };
+
   const confirmLogout = () => {
     Alert.alert("Sign out?", "You can sign back in anytime.", [
       { text: "Cancel", style: "cancel" },
@@ -1178,16 +1209,22 @@ export default function ProfileScreen() {
         throw new Error("Session expired.");
       }
 
-      if (!password.trim()) {
-        throw new Error("Please enter your password.");
+      const currentHasPasswordIdentity = currentUser.identities?.some(
+        (identity) => identity.provider === "email"
+      );
+
+      if (currentHasPasswordIdentity) {
+        if (!password.trim()) {
+          throw new Error("Please enter your password.");
+        }
+
+        const { error: reauthError } = await supabase.auth.signInWithPassword({
+          email: currentUser.email!,
+          password,
+        });
+
+        if (reauthError) throw new Error("Incorrect password.");
       }
-
-      const { error: reauthError } = await supabase.auth.signInWithPassword({
-        email: currentUser.email!,
-        password,
-      });
-
-      if (reauthError) throw new Error("Incorrect password.");
 
       const {
         data: { session },
@@ -1704,6 +1741,12 @@ export default function ProfileScreen() {
             ]}
           >
             {renderRow({
+              label: exportingData ? "Preparing export..." : "Export My Data",
+              onPress: exportingData ? undefined : handleExportData,
+              icon: "download-outline",
+            })}
+            <View style={[styles.divider, { backgroundColor: t.border }]} />
+            {renderRow({
               label: "Sign Out",
               onPress: confirmLogout,
               icon: "log-out-outline",
@@ -2090,8 +2133,9 @@ export default function ProfileScreen() {
             </Text>
 
             <Text style={[styles.modalDesc, { color: t.mutedText }]}>
-              This action cannot be undone. Type DELETE and enter your password to
-              continue.
+              {hasPasswordIdentity
+                ? "This action cannot be undone. Type DELETE and enter your password to continue."
+                : "This action cannot be undone. Type DELETE to continue."}
             </Text>
 
             <View
@@ -2124,22 +2168,24 @@ export default function ProfileScreen() {
               placeholderTextColor={t.mutedText}
             />
 
-            <TextInput
-              placeholder="Password"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-              editable={!loadingDelete}
-              style={[
-                styles.input,
-                {
-                  borderColor: t.border,
-                  color: t.text,
-                  backgroundColor: t.background,
-                },
-              ]}
-              placeholderTextColor={t.mutedText}
-            />
+            {hasPasswordIdentity ? (
+              <TextInput
+                placeholder="Password"
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+                editable={!loadingDelete}
+                style={[
+                  styles.input,
+                  {
+                    borderColor: t.border,
+                    color: t.text,
+                    backgroundColor: t.background,
+                  },
+                ]}
+                placeholderTextColor={t.mutedText}
+              />
+            ) : null}
 
             {confirmText.length > 0 && confirmText !== "DELETE" ? (
               <Text style={[styles.inlineError, { color: t.danger }]}>

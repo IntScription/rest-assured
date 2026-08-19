@@ -1,0 +1,57 @@
+import React from "react";
+import { render, waitFor } from "@testing-library/react-native";
+
+// See app/(auth)/__tests__/login.test.tsx for why everything the factory
+// needs is constructed *inside* it (via require/literals) rather than
+// closed over from outer const declarations.
+jest.mock("@/src/lib/supabase", () => {
+  const { createMockSupabase } = require("@/src/lib/testUtils/mockSupabase");
+  const mock = createMockSupabase();
+  mock.auth.getSession.mockResolvedValue({
+    data: { session: { user: { id: "user-1", email: "athlete@example.com" } } },
+    error: null,
+  });
+  mock.auth.getUser.mockResolvedValue({
+    data: { user: { id: "user-1", email: "athlete@example.com" } },
+    error: null,
+  });
+  return { __esModule: true, supabase: mock };
+});
+
+jest.mock("expo-router", () => ({
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useLocalSearchParams: () => ({}),
+  useFocusEffect: (callback: () => void | (() => void)) => {
+    const ReactActual = require("react");
+    ReactActual.useEffect(() => callback(), []);
+  },
+}));
+
+jest.mock("@/components/navigation/CustomTabBar", () => ({
+  useCustomTabBarBottomPadding: () => 80,
+}));
+
+jest.mock("expo-haptics", () => ({
+  notificationAsync: jest.fn(() => Promise.resolve()),
+  impactAsync: jest.fn(() => Promise.resolve()),
+  selectionAsync: jest.fn(() => Promise.resolve()),
+  NotificationFeedbackType: { Success: "success", Warning: "warning", Error: "error" },
+  ImpactFeedbackStyle: { Light: "light", Medium: "medium", Heavy: "heavy" },
+}));
+
+import HomeScreen from "../HomeScreen";
+
+describe("HomeScreen smoke test", () => {
+  it("renders the empty-splits state for a signed-in user with no program yet", async () => {
+    const { getByText } = await render(<HomeScreen />);
+
+    await waitFor(
+      () => {
+        expect(getByText(/no splits found/i)).toBeTruthy();
+      },
+      { timeout: 5000 }
+    );
+
+    expect(getByText("Go to Train")).toBeTruthy();
+  });
+});

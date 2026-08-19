@@ -20,6 +20,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/src/theme/theme";
 import { usePendingShareCount } from "@/src/features/train/hooks/usePendingShareCount";
+import {
+  startRestTimerLiveActivity,
+  updateRestTimerLiveActivity,
+  endRestTimerLiveActivity,
+  type RestTimerLiveActivityInstance,
+} from "@/src/features/train/liveActivity/restTimerLiveActivityBridge";
 
 export const CUSTOM_TAB_BAR_COLLAPSED_HEIGHT = 66;
 export const CUSTOM_TAB_BAR_EXPANDED_HEIGHT = 72;
@@ -848,6 +854,12 @@ function CustomTabBarInner({
     null
   );
 
+  // Mirrors the rest timer on the Lock Screen / Dynamic Island. iOS only;
+  // .start()/.update()/.end() are no-ops we guard against ourselves so a
+  // stale dev-client build (native module not yet linked) can't crash the
+  // whole timer feature the way the CSV export bug did earlier.
+  const restLiveActivityRef = useRef<RestTimerLiveActivityInstance>(null);
+
   const expandedCollapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
@@ -1136,6 +1148,14 @@ function CustomTabBarInner({
   }, [restRunning, restRemainingSeconds]);
 
   useEffect(() => {
+    if (!restRunning || !restLiveActivityRef.current) return;
+    void updateRestTimerLiveActivity(restLiveActivityRef.current, {
+      secondsRemaining: restRemainingSeconds,
+      totalSeconds: restDurationSeconds,
+    });
+  }, [restRunning, restRemainingSeconds, restDurationSeconds]);
+
+  useEffect(() => {
     if (!hasMountedRestRef.current) {
       hasMountedRestRef.current = true;
       return;
@@ -1143,6 +1163,11 @@ function CustomTabBarInner({
 
     if (restRemainingSeconds === 0 && restDurationSeconds > 0) {
       stopRestDoneHaptics();
+
+      if (restLiveActivityRef.current) {
+        void endRestTimerLiveActivity(restLiveActivityRef.current);
+        restLiveActivityRef.current = null;
+      }
 
       const pulseDone = async () => {
         try {
@@ -1176,6 +1201,7 @@ function CustomTabBarInner({
     return () => {
       stopRestDoneHaptics();
       clearExpandedAutoCollapse();
+      void endRestTimerLiveActivity(restLiveActivityRef.current);
     };
   }, [clearExpandedAutoCollapse]);
 
@@ -1198,6 +1224,11 @@ function CustomTabBarInner({
     setRestRemainingSeconds(0);
     setDraftMinutes(0);
     setDraftSeconds(0);
+
+    if (restLiveActivityRef.current) {
+      void endRestTimerLiveActivity(restLiveActivityRef.current);
+      restLiveActivityRef.current = null;
+    }
   }, [stopRestDoneHaptics]);
 
   const handleOpenRestPicker = useCallback(async () => {
@@ -1228,6 +1259,13 @@ function CustomTabBarInner({
     setRestRemainingSeconds(total);
     setRestRunning(true);
     setRestPickerVisible(false);
+
+    void endRestTimerLiveActivity(restLiveActivityRef.current).then(() => {
+      restLiveActivityRef.current = null;
+      return startRestTimerLiveActivity({ secondsRemaining: total, totalSeconds: total });
+    }).then((instance) => {
+      if (instance) restLiveActivityRef.current = instance;
+    });
   }, [draftMinutes, draftSeconds, stopRestDoneHaptics]);
 
   const handleExpandedInteractionStart = () => {

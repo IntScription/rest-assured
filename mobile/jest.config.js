@@ -6,4 +6,5 @@ module.exports = {
   },
   setupFiles: ["<rootDir>/jest.setup.js"],
   testPathIgnorePatterns: ["/node_modules/", "/ios/", "/android/"],
+  testTimeout: 10000,
 };

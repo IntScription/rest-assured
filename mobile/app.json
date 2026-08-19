@@ -63,13 +63,34 @@
         }
       ],
       "expo-build-properties",
-      "@sentry/react-native",
+      [
+        "@sentry/react-native",
+        {
+          "organization": "rest-assured",
+          "project": "rest-assured-mobile"
+        }
+      ],
       "expo-secure-store",
-      "expo-audio",
       "expo-font",
       "expo-image",
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-sharing",
+      [
+        "expo-widgets",
+        {
+          "enablePushNotifications": false,
+          "groupIdentifier": "group.com.mrk.restassured",
+          "widgets": [
+            {
+              "name": "RestTimerActivity",
+              "displayName": "Rest Timer",
+              "description": "Live countdown for your current rest timer.",
+              "supportedFamilies": ["systemSmall", "systemMedium"]
+            }
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

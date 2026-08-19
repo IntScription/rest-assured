@@ -105,6 +105,7 @@ import {
   getProgressInsight,
   getTrendCallouts,
 } from "@/src/features/exercise/utils/trendLogic";
+import { getExerciseDueSoonMessage } from "@/src/features/training-intelligence/dueSoon";
 
 type LogListCardProps = {
   item: LogRow;
@@ -990,7 +991,17 @@ export default function ExerciseScreen() {
 
   const trendCallouts = useMemo(() => {
     const callouts = getTrendCallouts(workingLogs);
-    return plateauResult.isPlateaued ? [plateauResult.message, ...callouts] : callouts;
+    const withPlateau = plateauResult.isPlateaued
+      ? [plateauResult.message, ...callouts]
+      : callouts;
+
+    if (workingLogs.length === 0) return withPlateau;
+
+    const dueSoonMessage = getExerciseDueSoonMessage(workingLogs);
+    const isActionable =
+      dueSoonMessage.startsWith("Overdue") || dueSoonMessage.startsWith("Due soon");
+
+    return isActionable ? [...withPlateau, dueSoonMessage] : withPlateau;
   }, [workingLogs, plateauResult]);
 
 

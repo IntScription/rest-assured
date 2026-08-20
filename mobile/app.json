@@ -67,7 +67,7 @@
         "@sentry/react-native",
         {
           "organization": "rest-assured",
-          "project": "rest-assured-mobile"
+          "project": "rest-assured-moblie"
         }
       ],
       "expo-secure-store",

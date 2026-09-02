@@ -28,6 +28,23 @@ async function deleteStep(query, label) {
   }
 }
 
+// Tables with no internal foreign-key dependents (safe to delete any time,
+// in any order, before the user's row itself goes away).
+const INDEPENDENT_USER_TABLES = [
+  "coach_conversations",
+  "coach_insights",
+  "coach_profiles",
+  "recovery_checkins",
+  "body_measurement_logs",
+  "health_sync_daily",
+  "monthly_training_reviews",
+  "notifications",
+  "user_notice_dismissals",
+  "user_achievements",
+  "user_challenges",
+  "global_program_likes",
+];
+
 export async function POST(req) {
   try {
     const authHeader = req.headers.get("authorization") || "";
@@ -55,17 +72,64 @@ export async function POST(req) {
 
     const userId = user.id;
 
+    // None of these tables have a foreign key back to auth.users (verified
+    // directly against the schema), so nothing here cascades automatically
+    // when the auth user is deleted below — every user-owned table has to
+    // be cleared explicitly, in dependency order (children before the
+    // parents they reference), or this "delete my account and all data"
+    // request silently leaves most of that data behind forever.
+
+    await deleteStep(
+      supabaseAdmin.from("exercise_prs").delete().eq("user_id", userId),
+      "Failed to delete exercise PRs"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("exercise_tut_logs").delete().eq("user_id", userId),
+      "Failed to delete time-under-tension logs"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("skill_logs").delete().eq("user_id", userId),
+      "Failed to delete skill logs"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("user_skill_milestones").delete().eq("user_id", userId),
+      "Failed to delete skill milestones"
+    );
+
     await deleteStep(
       supabaseAdmin.from("logs").delete().eq("user_id", userId),
       "Failed to delete logs"
     );
 
     await deleteStep(
-      supabaseAdmin
-        .from("workout_sessions")
-        .delete()
-        .eq("user_id", userId),
+      supabaseAdmin.from("workout_sessions").delete().eq("user_id", userId),
       "Failed to delete workout sessions"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("user_skills").delete().eq("user_id", userId),
+      "Failed to delete skills"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("program_imports").delete().eq("imported_by_user_id", userId),
+      "Failed to delete program imports"
+    );
+
+    await deleteStep(
+      supabaseAdmin
+        .from("program_shares")
+        .delete()
+        .or(`shared_by_user_id.eq.${userId},shared_with_user_id.eq.${userId}`),
+      "Failed to delete program shares"
+    );
+
+    await deleteStep(
+      supabaseAdmin.from("program_cycles").delete().eq("user_id", userId),
+      "Failed to delete program cycles"
     );
 
     await deleteStep(
@@ -95,6 +159,13 @@ export async function POST(req) {
       supabaseAdmin.from("programs").delete().eq("user_id", userId),
       "Failed to delete programs"
     );
+
+    for (const table of INDEPENDENT_USER_TABLES) {
+      await deleteStep(
+        supabaseAdmin.from(table).delete().eq("user_id", userId),
+        `Failed to delete ${table}`
+      );
+    }
 
     await deleteStep(
       supabaseAdmin.from("profiles").delete().eq("id", userId),

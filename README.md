@@ -4,6 +4,8 @@ A full-stack **health & fitness logging platform** built with **Next.js, React N
 
 The project includes a **web application, mobile application, CI pipeline, containerized infrastructure, and Kubernetes deployment**, demonstrating a complete modern development and DevOps workflow.
 
+App Store: [Rest Assured: Workout Log](https://apps.apple.com/in/app/rest-assured-workout-log/id6760107763)
+
 ---
 
 # Features
